@@ -31,10 +31,10 @@ classes:
 min_support_reliable: 30
 
 paths:
-  raw_rsud_nas_rawat_jalan: "raw_data/RSUD NAS DATA/RAWAT JALAN"
-  raw_rsud_nas_rawat_inap: "raw_data/RSUD NAS DATA/RAWAT INAP"
-  raw_rsa_ugm: "raw_data/RS Akademik UGM/Penelitian Wawa 1 Labeled.xlsx"
-  icd_skdr_mapping: "raw_data/RS Akademik UGM/ICD SKDR versi 30 Desember 2024 (1).xlsx"
+  raw_rsud_nas_rawat_jalan: "../raw_data/RSUD NAS DATA/RAWAT JALAN"
+  raw_rsud_nas_rawat_inap: "../raw_data/RSUD NAS DATA/RAWAT INAP"
+  raw_rsa_ugm: "../raw_data/RS Akademik UGM/Penelitian Wawa 1 Labeled.xlsx"
+  icd_skdr_mapping: "../raw_data/RS Akademik UGM/ICD SKDR versi 30 Desember 2024 (1).xlsx"
   interim_dir: "data/interim"
   processed_dir: "data/processed"
 
