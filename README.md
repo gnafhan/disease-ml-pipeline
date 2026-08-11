@@ -1,5 +1,7 @@
 # PKT Pipeline -- Klasifikasi Penyakit dari Anamnesa
 
+Folder ini terpisah dari notebook/dataset lama di `../` (satu level di atas) supaya kerjaan baru nggak nyampur sama file lama -- file lama dibiarkan apa adanya di sana, nggak disentuh.
+
 Restrukturisasi dari notebook lepas-lepas (`v2_v3.ipynb`, `v5_fixed.py`,
 `v6_training.py`, `v7_ensemble.py`) jadi satu pipeline modular dengan
 protokol evaluasi yang terkunci dan konsisten.
@@ -11,9 +13,11 @@ Claude, cek chat/artifact terkait.
 ## Setup
 
 1. **Aktifkan venv di terminal Mac langsung** (bukan lewat bridge Claude --
-   venv ini pakai path Homebrew macOS, nggak portable ke environment lain):
+   venv ini pakai path Homebrew macOS, nggak portable ke environment lain).
+   Venv-nya masih di folder lama (`../.venv`), sengaja nggak digandain biar
+   nggak install ulang semua package:
    ```
-   source .venv/bin/activate
+   source ../.venv/bin/activate
    ```
 2. Cek dependency yang sudah ada:
    ```
