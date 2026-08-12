@@ -64,10 +64,20 @@ def _try_secret(client: UserSecretsClient, name: str) -> str | None:
 
 def load_secrets_into_env() -> None:
     secrets = UserSecretsClient()
-    for name in ["GITHUB_TOKEN", "GITHUB_REPO", "HF_TOKEN", "HF_REPO_ID"]:
-        value = _try_secret(secrets, name)
-        if value:
-            os.environ[name] = value
+    aliases = {
+        "GITHUB_TOKEN": ["GITHUB_TOKEN"],
+        "GITHUB_REPO": ["GITHUB_REPO"],
+        # Label V2 dibuat ulang karena grant Secret lama berulang kali gagal
+        # di batch kernel walau toggle UI terlihat aktif.
+        "HF_TOKEN": ["HF_TOKEN_V2", "HF_TOKEN"],
+        "HF_REPO_ID": ["HF_REPO_ID_V2", "HF_REPO_ID"],
+    }
+    for env_name, secret_names in aliases.items():
+        for secret_name in secret_names:
+            value = _try_secret(secrets, secret_name)
+            if value:
+                os.environ[env_name] = value
+                break
     os.environ.setdefault("GITHUB_REPO", PUBLIC_GITHUB_REPO)
 
 
