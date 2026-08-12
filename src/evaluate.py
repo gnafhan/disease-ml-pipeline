@@ -33,6 +33,29 @@ def compute_metrics(y_true, y_pred, class_names: list[str],
     """
     prefix = f"{split_name}_"
 
+    # PENTING -- bug nyata yang ketemu di data Kaggle (6 run asli semua
+    # test_f1_macro/precision_macro/recall_macro = 0.0 padahal accuracy
+    # normal 52-73%): train.py ngirim y_true/y_pred berupa INDEX INTEGER
+    # (hasil np.argmax + label_ids dari HF Trainer), tapi baris di bawah ini
+    # dulu ngasih `labels=class_names` (list STRING) ke
+    # precision_recall_fscore_support. sklearn butuh `labels=` yang tipenya
+    # SAMA dengan isi y_true/y_pred -- kalau beda tipe, dia diam-diam nggak
+    # nemu satupun label yang cocok dan balik 0.0 semua TANPA error/warning
+    # (accuracy_score tetap normal karena dia nggak pakai parameter labels).
+    #
+    # Fix: normalisasi y_true/y_pred integer -> nama kelas string dulu (pakai
+    # class_names sebagai lookup table index->nama, ini valid karena
+    # class_names di train.py selalu diisi `list(le.classes_)` yang urutannya
+    # SAMA dengan encoding integer LabelEncoder). String yang udah string
+    # dibiarkan apa adanya -- ini juga yang bikin test lama (yang manggil
+    # compute_metrics langsung pakai nama kelas string) tetap valid.
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    if np.issubdtype(y_true.dtype, np.number):
+        y_true = np.array([class_names[int(i)] for i in y_true])
+    if np.issubdtype(y_pred.dtype, np.number):
+        y_pred = np.array([class_names[int(i)] for i in y_pred])
+
     accuracy = accuracy_score(y_true, y_pred)
 
     p_macro, r_macro, f1_macro, _ = precision_recall_fscore_support(
