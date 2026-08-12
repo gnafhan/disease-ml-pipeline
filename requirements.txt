@@ -1,10 +1,11 @@
 # Belum pinned ke versi exact -- cek versi yang sebenarnya kepakai dengan:
-#   .venv/bin/pip freeze | grep -iE "torch|transformers|pandas|openpyxl|scikit|pyyaml"
+#   .venv/bin/pip freeze | grep -iE "torch|transformers|pandas|openpyxl|scikit|pyyaml|huggingface"
 # lalu ganti baris di bawah dengan versi persis itu.
 pandas
 openpyxl
 scikit-learn
 torch
 transformers
+huggingface_hub
 pyyaml
 pytest

@@ -119,6 +119,15 @@ def main():
                          help="Auto commit+push experiments/runs.jsonl ke GitHub setelah TIAP "
                               "kombinasi -- backup progress kalau sesi Kaggle mati di tengah. "
                               "Butuh env var GITHUB_TOKEN & GITHUB_REPO.")
+    parser.add_argument("--push-hf", default=None, metavar="REPO_ID",
+                         help="Setelah SEMUA kombinasi (yang dijalankan di run ini) selesai, "
+                              "push model dgn test_f1_macro_reliable_only tertinggi ke "
+                              "HuggingFace Hub repo ini, mis. 'gnafhan/pkt-indobert-best'. "
+                              "Butuh env var HF_TOKEN. Run smoke-test selalu diabaikan saat "
+                              "milih model terbaik. Gagal push TIDAK menghapus hasil training "
+                              "lokal -- bisa di-push ulang manual lewat 'python -m src.push_to_hf'.")
+    parser.add_argument("--push-hf-private", action="store_true",
+                         help="Kalau dipakai bareng --push-hf, bikin repo HuggingFace-nya private.")
     args = parser.parse_args()
 
     # Import di sini (bukan di top-level) supaya --help tetap jalan cepat
@@ -181,6 +190,18 @@ def main():
     if not args.no_generate_report:
         from reports.generate_report import main as generate_report_main
         generate_report_main()
+
+    if args.push_hf:
+        from src.push_to_hf import push_best_model
+        try:
+            pushed = push_best_model(args.push_hf, private=args.push_hf_private)
+            headline = pushed.get("test_f1_macro_reliable_only", pushed.get("test_f1_macro"))
+            print(f"[push-hf] '{pushed['run_id']}' (test_f1_macro_reliable_only={headline}) "
+                  f"live di https://huggingface.co/{args.push_hf}")
+        except Exception as e:
+            print(f"[push-hf] GAGAL ({e}) -- hasil training tetap aman di experiments/ dan "
+                  f"runs.jsonl, bisa di-push manual nanti: python -m src.push_to_hf "
+                  f"--repo-id {args.push_hf}")
 
     return {"ok": results, "failed": failures}
 

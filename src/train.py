@@ -251,6 +251,15 @@ def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.ya
     trainer.train()
     training_time_sec = round(time.time() - t0, 2)
 
+    # load_best_model_at_end=True -> trainer.model sudah otomatis di-restore
+    # ke checkpoint TERBAIK (bukan cuma epoch terakhir) begitu train() selesai.
+    # Simpan model+tokenizer FINAL langsung di root output_dir (bukan cuma di
+    # subfolder checkpoint-XXXX bikinan Trainer) supaya src/push_to_hf.py bisa
+    # push langsung dari sini tanpa harus tebak-tebak checkpoint step mana yang
+    # dipakai.
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
     val_metrics = trainer.evaluate(val_ds)
     val_metrics = {k.replace("eval_", ""): v for k, v in val_metrics.items() if k.startswith("eval_val_")}
 

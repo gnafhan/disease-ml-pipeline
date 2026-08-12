@@ -20,14 +20,23 @@ Claude, cek chat/artifact terkait.
 - [x] `src/clean.py` -- **sudah jalan & tervalidasi**
 - [x] `src/split.py` -- **sudah jalan** (tanpa dependency scikit-learn, lihat catatan)
 - [x] `src/pipeline.py` -- **data-v1/v2/v3 SUDAH ter-generate nyata**, lihat `data/processed/`
-- [x] `src/train.py` -- kode lengkap, **BELUM PERNAH DIJALANKAN dgn model sungguhan** (butuh GPU + akses HuggingFace, lihat bagian Training)
+- [x] `src/train.py` -- **smoke-test SUDAH lolos di Kaggle GPU (semua 6 kombinasi)**;
+      training PENUH (tanpa `--smoke-test`) belum pernah dituntaskan sampai
+      selesai -- lihat bagian Training buat status terbaru
 - [x] `src/evaluate.py` -- kode lengkap, teruji dgn data sintetis
-- [x] `src/run_all_experiments.py` -- entrypoint Kaggle, orkestrasi 6 kombinasi teruji (training di-mock)
-- [x] `tests/` -- 26 test (label/clean/evaluate/run_all_experiments: unit test
-      murni; ingest: jalan terhadap raw_data asli). `pytest` tidak ada di
-      bridge ini (no internet utk install) -- jalankan manual dari terminal Mac:
-      `source ../.venv/bin/activate && pip install pytest && pytest tests/ -v`
-- [x] `reports/generate_report.py` -- sudah jalan, generate kerangka + tabel
+- [x] `src/run_all_experiments.py` -- entrypoint Kaggle, orkestrasi 6 kombinasi
+      teruji (training di-mock di test, tapi orkestrasinya sendiri sudah
+      jalan sungguhan di Kaggle); `--push-git` backup progress ke GitHub tiap
+      kombinasi, `--push-hf` auto-push model terbaik ke HuggingFace Hub di akhir
+- [x] `src/push_to_hf.py` -- pilih run non-smoke-test dgn `test_f1_macro_reliable_only`
+      tertinggi, push ke HuggingFace Hub + generate model card otomatis
+- [x] `tests/` -- 47 test (label/clean/evaluate/split/run_all_experiments/
+      generate_report/train_config/push_to_hf: unit test murni, tanpa
+      GPU/internet; ingest: jalan terhadap raw_data asli). Jalankan:
+      `source ../.venv/bin/activate && pytest tests/ -v`
+- [x] `reports/generate_report.py` -- sudah jalan, generate kerangka + tabel;
+      dedup otomatis per run_id (entri terbaru menang) supaya hasil smoke-test
+      lama nggak numpuk di matriks final
 
 ## CATATAN PENTING -- sanity-check mapping ICD sebelum treat hasil sbg final
 
@@ -94,22 +103,42 @@ Output: `data/processed/<version>/{train,val,test}.csv` + `class_distribution.js
 + `dropped_icd_summary.csv` + `build_summary.json`. Format CSV (bukan parquet)
 supaya tetap jalan tanpa `pyarrow` di environment mana pun.
 
-## Training -- BUTUH GPU, belum pernah dijalankan di sesi ini
+## Training -- BUTUH GPU, smoke-test sudah lolos di Kaggle, training penuh belum kelar
 
 `src/train.py` sudah lengkap (focal loss, class weights, symptom-flag
 injection, dropout-after-load fix dari V5, semuanya di-port dari
-`v5_fixed.py`) tapi **belum pernah benar-benar dijalankan dengan model
-sungguhan** -- bridge Claude (3.8GB RAM, no GPU, no internet ke HuggingFace)
+`v5_fixed.py`). Bridge Claude (3.8GB RAM, no GPU, no internet ke HuggingFace)
 dan Mac langsung (CPU-only) keduanya nggak cukup buat fine-tune IndoBERT
-dalam waktu wajar. Yang SUDAH diverifikasi jalan tanpa error (lihat
-`tests/test_run_all_experiments.py`, 5 test, training di-mock): urutan 6
-kombinasi, lanjut otomatis walau 1 gagal, filter `--only`, resume via
-`--skip-existing`. Juga sudah dicek terpisah: focal loss (loss makin besar
-kalau prediksi makin salah), symptom-flag extraction (flag `[CAMPAK]` sudah
-gak pernah muncul lagi), dan `build_input` (aman kalau usia/gender kosong).
-Yang BELUM bisa diverifikasi di sini: proses download model pretrained dari
-HuggingFace itu sendiri, karena `huggingface.co` juga gak ke-reach dari
-sandbox Claude. Ini murni soal akses jaringan, bukan soal logic training-nya.
+dalam waktu wajar, jadi verifikasi sungguhan HARUS di Kaggle GPU.
+
+Status per sesi terakhir: `--smoke-test` (1 epoch, 2 sampel/kelas) SUDAH
+lolos 6/6 kombinasi di Kaggle T4 tanpa error -- ini juga sekaligus
+membuktikan bagian yang sebelumnya nggak bisa diverifikasi dari sandbox
+manapun (download model pretrained dari HuggingFace, tokenizer, GPU
+fine-tuning loop) beneran jalan. Training PENUH (tanpa `--smoke-test`, 12
+epoch x 6 kombinasi) belum pernah dituntaskan sampai selesai -- itu yang
+seharusnya jadi hasil akhir buat matriks perbandingan di BAB IV laporan TA.
+
+Bug yang udah ketemu & dibenerin lewat proses smoke-test-di-Kaggle ini (baik
+`pytest` di sandbox maupun unit test murni nggak bisa nangkep ini karena
+keduanya nggak pernah benar-benar memanggil kode training asli dgn config
+asli):
+- `train.py` baca `cfg["split"]["seed"]` padahal `seed` itu top-level di
+  config (`cfg["seed"]`) -- bikin SEMUA 6 kombinasi gagal serentak dgn
+  `KeyError`. Sudah ada regression test (`tests/test_train_config.py`) yang
+  nge-cek tiap akses `cfg[...]` di `train.py` beneran match struktur YAML.
+- `reports/generate_report.py` belum dedup per `run_id` -- kalau
+  smoke-test lalu training asli jalan berurutan, `runs.jsonl` numpuk 2 entri
+  per `run_id` dan matriks akhir jadi campur. Sudah dibenerin (entri
+  TERAKHIR per `run_id` yang dipakai), diuji di `tests/test_generate_report.py`.
+
+Yang SUDAH diverifikasi jalan tanpa error lewat unit test murni (nggak butuh
+GPU/internet): urutan 6 kombinasi, lanjut otomatis walau 1 gagal, filter
+`--only`, resume via `--skip-existing`, `--push-git` (backup progress ke
+GitHub tiap kombinasi), `--push-hf` (pilih & push model terbaik ke
+HuggingFace Hub). Juga: focal loss (loss makin besar kalau prediksi makin
+salah), symptom-flag extraction (flag `[CAMPAK]` udah gak pernah muncul
+lagi), dan `build_input` (aman kalau usia/gender kosong).
 
 ### Entrypoint: `src/run_all_experiments.py`
 
@@ -181,15 +210,15 @@ untuk training. Yang perlu diupload ke Kaggle cuma folder `data/processed/`
   - **Accelerator: GPU T4 x2** (atau P100, tergantung kuota tersisa).
   - **Internet: On.**
 
-### 4. Simpan GitHub token sebagai Kaggle Secret
+### 4. Simpan token GitHub (dan opsional HuggingFace) sebagai Kaggle Secret
 
-Dibutuhkan utk dua hal: (a) kalau repo private, buat clone; (b) buat
-`--push-git` (lihat Cell 5) -- backup progress otomatis ke GitHub setelah
-tiap kombinasi selesai, supaya kalau sesi Kaggle mati/ke-stop beneran di
-tengah (bukan cuma di-pause), progress yang udah kelar TIDAK hilang.
-`/kaggle/working` itu ephemeral: begitu kernel-nya restart/mati, isinya
-kosong lagi pas clone ulang, jadi tanpa push balik ke GitHub, `runs.jsonl`
-dari sesi sebelumnya nggak ada cara buat kebawa ke sesi yang baru.
+**GitHub token**, dibutuhkan utk dua hal: (a) kalau repo private, buat
+clone; (b) buat `--push-git` (lihat Cell 5) -- backup progress otomatis ke
+GitHub setelah tiap kombinasi selesai, supaya kalau sesi Kaggle mati/ke-stop
+beneran di tengah (bukan cuma di-pause), progress yang udah kelar TIDAK
+hilang. `/kaggle/working` itu ephemeral: begitu kernel-nya restart/mati,
+isinya kosong lagi pas clone ulang, jadi tanpa push balik ke GitHub,
+`runs.jsonl` dari sesi sebelumnya nggak ada cara buat kebawa ke sesi yang baru.
 
 - Buat token di GitHub: Settings -> Developer settings -> Personal access
   tokens -> Fine-grained token. Kalau cuma buat clone repo private, scope
@@ -199,10 +228,21 @@ dari sesi sebelumnya nggak ada cara buat kebawa ke sesi yang baru.
   - `GITHUB_TOKEN` -- isi token dari atas.
   - `GITHUB_REPO` -- isi `<username>/<nama-repo>`, mis. `gnafhan/disease-ml-pipeline`.
 
+**HuggingFace token** (opsional, cuma kalau mau `--push-hf` -- lihat Cell 5
+dan bagian 7 di bawah, buat push model terbaik langsung ke HuggingFace Hub
+supaya pipeline-nya beneran end-to-end: data -> training -> model live):
+
+- Buat token di huggingface.co -> Settings -> Access Tokens -> New token,
+  scope **Write**.
+- Kaggle Secret: nama `HF_TOKEN`, isi token itu.
+- **Nggak perlu username HuggingFace di mana pun** -- token doang cukup,
+  sama seperti GitHub token, HuggingFace nggak validasi token itu harus
+  cocok sama username tertentu.
+
 ### 5. Isi cell notebook, urut dari atas
 
 ```python
-# Cell 1 -- clone repo + set env var buat --push-git nanti
+# Cell 1 -- clone repo + set env var buat --push-git & --push-hf nanti
 import os
 from kaggle_secrets import UserSecretsClient
 
@@ -215,6 +255,11 @@ try:
     repo_url = f"https://{token}@github.com/{repo}.git"
 except Exception:
     repo_url = "https://github.com/<username>/<nama-repo>.git"  # repo public, tanpa Secret
+
+try:
+    os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")  # opsional, buat --push-hf
+except Exception:
+    pass  # nggak masalah kalau nggak dipakai -- --push-hf nanti tinggal di-skip
 
 !git clone {repo_url} repo
 %cd repo
@@ -247,12 +292,16 @@ shutil.copytree(src, "data/processed", dirs_exist_ok=True)
 ```
 
 ```python
-# Cell 5 -- run sungguhan, semua 6 kombinasi. --push-git nge-backup
-# experiments/runs.jsonl ke GitHub setelah TIAP kombinasi (bukan nunggu
-# ke-6 kelar) -- kalau env var GITHUB_TOKEN/GITHUB_REPO belum di-set (Cell 1
-# gagal ambil Secret, mis. karena repo public dan kamu skip Secret-nya),
-# ini otomatis SKIP dengan pesan, training tetap lanjut seperti biasa.
-!python -m src.run_all_experiments --push-git
+# Cell 5 -- run sungguhan, semua 6 kombinasi.
+# --push-git : backup experiments/runs.jsonl ke GitHub setelah TIAP
+#              kombinasi (bukan nunggu ke-6 kelar).
+# --push-hf  : setelah SEMUA kombinasi selesai, otomatis push model dgn
+#              test_f1_macro_reliable_only TERTINGGI ke HuggingFace Hub --
+#              ganti repo-id sesuai akun HuggingFace kamu.
+# Kalau env var GITHUB_TOKEN/GITHUB_REPO atau HF_TOKEN belum ke-set (Cell 1
+# gagal ambil Secret), masing-masing otomatis SKIP dengan pesan, training
+# tetap lanjut seperti biasa -- bukan error fatal.
+!python -m src.run_all_experiments --push-git --push-hf gnafhan/pkt-indobert-best
 ```
 
 Kalau sesi Kaggle mati/keputus di tengah (limit ~9-12 jam per sesi, kuota GPU
@@ -287,3 +336,27 @@ lalu:
 Atau kalau lebih simpel: klik kanan `experiments/runs.jsonl` di file browser
 Kaggle -> Download, lalu taruh manual ke `pipeline/experiments/runs.jsonl` di
 laptop dan `git pull` biasa dari terminal Mac.
+
+### 7. (Opsional) Push model terbaik ke HuggingFace Hub
+
+Kalau sudah pakai `--push-hf <repo-id>` di Cell 5, ini otomatis kejadian di
+akhir Cell 5 tanpa langkah tambahan -- model dgn `test_f1_macro_reliable_only`
+tertinggi (run smoke-test selalu diabaikan) langsung ke-upload ke
+`https://huggingface.co/<repo-id>` lengkap dengan model card (metrik + data
+version + disclaimer batasan model).
+
+Kalau lupa pasang `--push-hf` waktu run Cell 5, atau mau push run TERTENTU
+(bukan otomatis yang skornya tertinggi), bisa dipanggil manual belakangan
+selama `experiments/<run_id>/` masih ada di working directory sesi yang sama
+(begitu sesi Kaggle-nya mati, folder model ini HILANG -- makanya kalau mau
+model tersimpan permanen, push-nya harus sebelum sesi itu berakhir):
+```python
+# Cell 7 -- push manual (repo-id ganti sesuai punya kamu)
+!python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best
+# atau push run tertentu, bukan otomatis yang terbaik:
+!python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best --run-id v3_large
+```
+
+Model yang di-push cuma model FINAL (bobot terbaik hasil `load_best_model_at_end`),
+bukan tiap checkpoint per-epoch -- itu memang sengaja disaring biar repo
+HuggingFace-nya nggak penuh sampah checkpoint yang nggak kepakai.
