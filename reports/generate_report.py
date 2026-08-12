@@ -26,16 +26,37 @@ MATRIX_COLUMNS = [
 ]
 
 
+_CANONICAL_RUN_ORDER = [f"{dv}_{mk}" for dv in ("v1", "v2", "v3") for mk in ("base", "large")]
+
+
 def load_runs(path: str = RUNS_PATH) -> list[dict]:
+    """
+    Baca experiments/runs.jsonl. Satu run_id (mis. "v1_base") bisa muncul lebih
+    dari sekali di file ini -- misal smoke-test dulu (--smoke-test) baru
+    training asli, atau resume sesi Kaggle yang keputus lalu diulang. Dalam
+    kasus itu, entri YANG PALING TERAKHIR ditulis (baris paling bawah) yang
+    dipakai -- itu representasi paling baru/final utk run_id tersebut, entri
+    lama (mis. hasil smoke-test dgn f1=0.0) TIDAK boleh ikut nongol di
+    matriks final.
+    """
     if not os.path.exists(path):
         return []
-    runs = []
+    by_run_id: dict[str, dict] = {}
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                runs.append(json.loads(line))
-    return runs
+            if not line:
+                continue
+            record = json.loads(line)
+            run_id = record.get("run_id")
+            if run_id:
+                by_run_id[run_id] = record  # overwrite -> entri terakhir menang
+
+    # urutan stabil: kombinasi kanonik (v1_base..v3_large) dulu, run_id asing
+    # (kalau ada) ditaruh di belakang, bukan hilang diam-diam.
+    ordered = [by_run_id[rid] for rid in _CANONICAL_RUN_ORDER if rid in by_run_id]
+    leftover = [r for rid, r in by_run_id.items() if rid not in _CANONICAL_RUN_ORDER]
+    return ordered + leftover
 
 
 def build_matrix_table(runs: list[dict]) -> pd.DataFrame:
