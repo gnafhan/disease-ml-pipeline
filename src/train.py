@@ -167,7 +167,7 @@ def make_focal_trainer_class(focal_loss_fn):
 def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.yaml",
         smoke_test: bool = False) -> dict:
     cfg = load_config(cfg_path)
-    seed = cfg["split"]["seed"]
+    seed = cfg["seed"]
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
