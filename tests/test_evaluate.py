@@ -1,9 +1,11 @@
 import os
 import sys
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.evaluate import compute_metrics
+from src.evaluate import build_error_analysis, compute_metrics
 
 
 def test_compute_metrics_prefixes_keys_correctly():
@@ -90,3 +92,30 @@ def test_compute_metrics_with_integer_labels_and_reliable_mask():
 
     assert result["test_f1_macro_reliable_only"] > 0.0
     assert result["test_n_reliable_classes"] == 2
+
+
+def test_build_error_analysis_is_aggregate_only_and_has_slices():
+    metadata = pd.DataFrame({
+        "record_id": ["secret-1", "secret-2", "secret-3", "secret-4"],
+        "anamnesa": ["raw one", "raw two", "raw three", "raw four"],
+        "source": ["RS_A", "RS_A", "RS_B", "RS_B"],
+        "visit_type": ["rawat jalan", "rawat inap", "rawat jalan", "rawat jalan"],
+        "v4_anchor_match": [True, False, True, False],
+        "v4_word_count": [3, 10, 25, 80],
+    })
+
+    artifact = build_error_analysis(
+        [0, 0, 1, 1], [0, 1, 1, 0], ["A", "B"], metadata=metadata,
+    )
+
+    assert sum(map(sum, artifact["confusion_matrix"])) == 4
+    assert artifact["top_confusions"] == [
+        {"true_class": "A", "predicted_class": "B", "n_rows": 1},
+        {"true_class": "B", "predicted_class": "A", "n_rows": 1},
+    ]
+    assert set(artifact["error_slices"]) == {
+        "source", "visit_type", "v4_anchor_match", "word_count_bin",
+    }
+    serialized = str(artifact)
+    assert "secret-1" not in serialized
+    assert "raw one" not in serialized

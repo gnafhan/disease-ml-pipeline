@@ -17,7 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src import ingest, label as label_mod
 from src.split import load_config
 
-RAW_DATA_AVAILABLE = os.path.isdir("raw_data")
+# Test dijalankan dari pipeline/, sedangkan raw_data sengaja berada satu level
+# di atas agar tidak tercampur repo/push GitHub.
+RAW_DATA_AVAILABLE = os.path.isdir("../raw_data")
 
 pytestmark = pytest.mark.skipif(not RAW_DATA_AVAILABLE, reason="raw_data/ tidak ada di environment ini")
 
@@ -40,7 +42,14 @@ def test_row_count_matches_source(cfg):
             continue
         xl = pd.ExcelFile(os.path.join(folder, fname))
         for sheet in xl.sheet_names:
-            manual_total += len(xl.parse(sheet))
+            grid = xl.parse(sheet, header=None)
+            header_row = 0
+            for idx, row in grid.head(15).iterrows():
+                values = {str(value).strip() for value in row.dropna()}
+                if "Anamnesa" in values and values & {"Kode ICD", "ICD Code", "No. RM"}:
+                    header_row = int(idx)
+                    break
+            manual_total += len(xl.parse(sheet, header=header_row))
 
     result = ingest.load_rsud_nas_folder(folder, "RAWAT JALAN")
     assert len(result.df) == manual_total, (

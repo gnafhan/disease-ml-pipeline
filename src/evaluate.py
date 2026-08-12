@@ -14,8 +14,10 @@ ATURAN WAJIB dipakai di train.py/pipeline.py:
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from sklearn.metrics import (
     accuracy_score, precision_recall_fscore_support, classification_report,
+    confusion_matrix,
 )
 
 
@@ -119,3 +121,62 @@ def build_hf_compute_metrics(class_names: list[str], reliable_mask_per_class: di
 def full_classification_report(y_true, y_pred, class_names: list[str]) -> str:
     return classification_report(y_true, y_pred, labels=list(range(len(class_names))),
                                   target_names=class_names, zero_division=0)
+
+
+def build_error_analysis(y_true, y_pred, class_names: list[str],
+                         metadata: pd.DataFrame | None = None) -> dict:
+    """Buat artefak error agregat tanpa teks atau identifier pasien."""
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    true_names = (
+        np.array([class_names[int(index)] for index in y_true])
+        if np.issubdtype(y_true.dtype, np.number) else y_true.astype(str)
+    )
+    pred_names = (
+        np.array([class_names[int(index)] for index in y_pred])
+        if np.issubdtype(y_pred.dtype, np.number) else y_pred.astype(str)
+    )
+
+    matrix = confusion_matrix(true_names, pred_names, labels=class_names)
+    pairs = []
+    for true_idx, true_class in enumerate(class_names):
+        for pred_idx, pred_class in enumerate(class_names):
+            if true_idx != pred_idx and matrix[true_idx, pred_idx]:
+                pairs.append({
+                    "true_class": true_class,
+                    "predicted_class": pred_class,
+                    "n_rows": int(matrix[true_idx, pred_idx]),
+                })
+
+    result = {
+        "labels": class_names,
+        "confusion_matrix": matrix.astype(int).tolist(),
+        "top_confusions": sorted(pairs, key=lambda row: -row["n_rows"])[:20],
+        "error_slices": {},
+    }
+    if metadata is None:
+        return result
+
+    safe = metadata.reset_index(drop=True).copy()
+    if len(safe) != len(true_names):
+        raise ValueError("metadata dan prediction harus punya jumlah baris yang sama")
+    safe["_correct"] = true_names == pred_names
+    if "v4_word_count" in safe.columns:
+        safe["word_count_bin"] = pd.cut(
+            safe["v4_word_count"], bins=[-1, 5, 15, 50, float("inf")],
+            labels=["0-5", "6-15", "16-50", ">50"],
+        ).astype(str)
+
+    for column in ["source", "visit_type", "v4_anchor_match", "word_count_bin"]:
+        if column not in safe.columns:
+            continue
+        result["error_slices"][column] = [
+            {
+                "value": "missing" if pd.isna(value) else str(value),
+                "n_rows": int(len(group)),
+                "accuracy": round(float(group["_correct"].mean()), 4),
+                "error_rate": round(float(1.0 - group["_correct"].mean()), 4),
+            }
+            for value, group in safe.groupby(column, dropna=False)
+        ]
+    return result

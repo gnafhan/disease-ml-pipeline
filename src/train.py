@@ -2,13 +2,15 @@
 Training entrypoint tunggal -- ganti v5_fixed.py / v6_training.py / v7_ensemble.py
 yang sebelumnya jadi 3 file terpisah per iterasi.
 
-Jalankan salah satu dari 6 kombinasi wajib (lihat rancangan-pipeline-redo.html):
+Jalankan salah satu kombinasi data/model:
     python -m src.train --data-version v1 --model base
     python -m src.train --data-version v1 --model large
     python -m src.train --data-version v2 --model base
     python -m src.train --data-version v2 --model large
     python -m src.train --data-version v3 --model base
     python -m src.train --data-version v3 --model large
+    python -m src.train --data-version v4 --model base
+    python -m src.train --data-version v4 --model large
 
 BUTUH GPU -- jalankan di Kaggle (lihat README.md bagian "Cara run di Kaggle").
 Di CPU (Mac/bridge biasa) ini akan jalan tapi sangat lambat untuk IndoBERT-large
@@ -24,11 +26,16 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
+import importlib.metadata
 import json
 import os
+import platform
 import random
 import shutil
+import subprocess
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -42,7 +49,7 @@ from transformers import (
     TrainingArguments, Trainer, EarlyStoppingCallback,
 )
 
-from src.evaluate import compute_metrics, build_hf_compute_metrics
+from src.evaluate import build_error_analysis, build_hf_compute_metrics, compute_metrics
 from src.split import load_config
 from src.pipeline import log_run
 
@@ -193,6 +200,52 @@ def cleanup_old_checkpoints(output_dir: str) -> list[str]:
     return removed
 
 
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _runtime_manifest(cfg_path: str, data_dir: str, trainer: Trainer,
+                      device: torch.device) -> dict:
+    """Rekam provenance yang cukup untuk mengaudit atau mengulang run GPU."""
+    try:
+        git_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        git_sha = None
+
+    packages = {}
+    for package in ["torch", "transformers", "pandas", "numpy", "scikit-learn"]:
+        try:
+            packages[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            packages[package] = None
+
+    checkpoint = trainer.state.best_model_checkpoint
+    return {
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "git_sha": git_sha,
+        "python": platform.python_version(),
+        "packages": packages,
+        "device": str(device),
+        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "config_sha256": _sha256_file(cfg_path),
+        "dataset_sha256": {
+            split: _sha256_file(os.path.join(data_dir, f"{split}.csv"))
+            for split in ["train", "val", "test"]
+        },
+        "best_metric": trainer.state.best_metric,
+        "best_model_checkpoint": os.path.basename(checkpoint) if checkpoint else None,
+        "global_step": trainer.state.global_step,
+        "epochs_completed": trainer.state.epoch,
+    }
+
+
 def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.yaml",
         smoke_test: bool = False) -> dict:
     cfg = load_config(cfg_path)
@@ -297,6 +350,16 @@ def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.ya
     test_preds = np.argmax(test_output.predictions, axis=-1)
     test_metrics = compute_metrics(test_output.label_ids, test_preds, list(le.classes_), reliable_mask, split_name="test")
 
+    error_analysis = build_error_analysis(
+        test_output.label_ids, test_preds, list(le.classes_), metadata=test_df,
+    )
+    with open(os.path.join(output_dir, "error_analysis.json"), "w", encoding="utf-8") as f:
+        json.dump(error_analysis, f, ensure_ascii=False, indent=2)
+
+    manifest = _runtime_manifest(cfg_path, data_dir, trainer, device)
+    with open(os.path.join(output_dir, "run_manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
     label_map = {i: cls for i, cls in enumerate(le.classes_)}
     with open(os.path.join(output_dir, "label_map.json"), "w", encoding="utf-8") as f:
         json.dump(label_map, f, ensure_ascii=False, indent=2)
@@ -310,6 +373,8 @@ def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.ya
         "num_classes": num_classes,
         "training_time_sec": training_time_sec,
         "smoke_test": smoke_test,
+        "best_metric": manifest["best_metric"],
+        "epochs_completed": manifest["epochs_completed"],
         **val_metrics,
         **test_metrics,
     }
@@ -319,7 +384,7 @@ def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.ya
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-version", choices=["v1", "v2", "v3"], required=True)
+    parser.add_argument("--data-version", choices=["v1", "v2", "v3", "v4"], required=True)
     parser.add_argument("--model", choices=["base", "large"], required=True)
     parser.add_argument("--smoke-test", action="store_true",
                          help="1 epoch, subset kecil per kelas -- utk cek pipeline jalan tanpa nunggu training penuh")

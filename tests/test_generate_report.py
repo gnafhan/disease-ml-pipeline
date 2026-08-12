@@ -12,6 +12,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from reports.generate_report import build_matrix_table, load_runs
@@ -26,14 +28,11 @@ def _write_runs(records):
             f.write(json.dumps(r) + "\n")
 
 
-def setup_function(_):
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
-
-
-def teardown_function(_):
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
+@pytest.fixture(autouse=True)
+def isolated_working_directory(tmp_path, monkeypatch):
+    """Report unit tests must not mutate the repo's real run log."""
+    monkeypatch.chdir(tmp_path)
+    yield
 
 
 def test_later_entry_for_same_run_id_wins_over_earlier_smoke_test():

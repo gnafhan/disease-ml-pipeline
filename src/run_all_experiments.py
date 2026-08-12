@@ -48,11 +48,13 @@ ALL_COMBOS = [
     ("v2", "base"), ("v2", "large"),
     ("v3", "base"), ("v3", "large"),
 ]
+V4_COMBOS = [("v4", "base"), ("v4", "large")]
+KNOWN_COMBOS = ALL_COMBOS + V4_COMBOS
 
 RUNS_PATH = "experiments/runs.jsonl"
 
 
-def _load_existing_run_ids(runs_path: str = RUNS_PATH) -> set[str]:
+def _load_existing_run_ids(runs_path: str = RUNS_PATH, smoke_test: bool = False) -> set[str]:
     if not os.path.exists(runs_path):
         return set()
     ids = set()
@@ -62,7 +64,11 @@ def _load_existing_run_ids(runs_path: str = RUNS_PATH) -> set[str]:
             if not line:
                 continue
             try:
-                ids.add(json.loads(line).get("run_id"))
+                record = json.loads(line)
+                # Full training tidak boleh di-skip hanya karena pernah ada
+                # smoke-test. Field lama tanpa smoke_test dianggap full run.
+                if smoke_test or not record.get("smoke_test", False):
+                    ids.add(record.get("run_id"))
             except json.JSONDecodeError:
                 continue
     return ids
@@ -145,13 +151,13 @@ def main():
     combos = ALL_COMBOS
     if args.only:
         wanted = set(args.only.split(","))
-        combos = [(dv, mk) for dv, mk in ALL_COMBOS if f"{dv}_{mk}" in wanted]
+        combos = [(dv, mk) for dv, mk in KNOWN_COMBOS if f"{dv}_{mk}" in wanted]
         missing = wanted - {f"{dv}_{mk}" for dv, mk in combos}
         if missing:
             raise SystemExit(f"run_id tidak dikenal: {missing}. Pilihan valid: "
-                              f"{[f'{dv}_{mk}' for dv, mk in ALL_COMBOS]}")
+                              f"{[f'{dv}_{mk}' for dv, mk in KNOWN_COMBOS]}")
 
-    existing = _load_existing_run_ids() if args.skip_existing else set()
+    existing = _load_existing_run_ids(smoke_test=args.smoke_test) if args.skip_existing else set()
 
     results, failures = [], []
     t_all = time.time()
@@ -193,15 +199,30 @@ def main():
         #     src/train.py, itu penyebab utamanya; ini lapisan tambahan).
         if args.push_hf and record is not None and not record.get("smoke_test"):
             from src.push_to_hf import push_run_to_hf
-            try:
-                repo_id = push_run_to_hf(record, args.push_hf, private=args.push_hf_private,
-                                          cleanup=args.push_hf_cleanup_local)
-                print(f"    [push-hf] '{run_id}' -> https://huggingface.co/{repo_id}"
-                      + (" (lokal dibersihkan)" if args.push_hf_cleanup_local else ""))
-            except Exception as e:
-                print(f"    [push-hf] GAGAL push '{run_id}' ({e}) -- model tetap ada lokal, "
-                      f"bisa di-push manual: python -m src.push_to_hf --repo-base "
-                      f"{args.push_hf} --run-id {run_id}")
+            push_error = None
+            for attempt in range(1, 4):
+                try:
+                    repo_id = push_run_to_hf(
+                        record, args.push_hf, private=args.push_hf_private,
+                        cleanup=args.push_hf_cleanup_local,
+                    )
+                    print(f"    [push-hf] '{run_id}' -> https://huggingface.co/{repo_id}"
+                          + (" (lokal dibersihkan)" if args.push_hf_cleanup_local else ""))
+                    push_error = None
+                    break
+                except Exception as e:
+                    push_error = e
+                    print(f"    [push-hf] attempt {attempt}/3 gagal untuk '{run_id}': {e}")
+                    if attempt < 3:
+                        time.sleep(15 * attempt)
+            if push_error is not None:
+                failures.append({
+                    "run_id": run_id,
+                    "stage": "push_hf",
+                    "error": str(push_error),
+                })
+                print(f"    [push-hf] GAGAL permanen '{run_id}' -- model tetap ada lokal dan "
+                      "kernel akan berstatus error, bukan false-success.")
 
         remaining = len(combos) - i
         if remaining and results:
@@ -225,4 +246,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    outcome = main()
+    if outcome["failed"]:
+        raise SystemExit(1)

@@ -1,0 +1,436 @@
+{
+  "versions": {
+    "v3": {
+      "summary": {
+        "version": "v3",
+        "rows_before_split": 5249,
+        "rows_written": 4665,
+        "rows_lost_during_split": 584,
+        "split_rows": {
+          "train": 3673,
+          "val": 524,
+          "test": 468
+        },
+        "n_classes": 12,
+        "stage_counts": {},
+        "empty_rows": 87,
+        "rows_in_duplicate_templates": 449,
+        "duplicate_template_groups": 166,
+        "conflicting_template_groups": 2,
+        "conflicting_template_rows": 91,
+        "multi_class_patient_ids": 87,
+        "rows_from_multi_class_patients": 252,
+        "patient_overlap_groups": 0,
+        "template_overlap_groups": 12,
+        "median_words": 35.0,
+        "p95_words": 99.0
+      },
+      "class_profile": [
+        {
+          "class": "Pneumonia/ISPA",
+          "rows": 1375,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.9702,
+          "anchor_coverage": 0.8764,
+          "reliable": true
+        },
+        {
+          "class": "COVID-19 Konfirmasi",
+          "rows": 1054,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.9127,
+          "reliable": true
+        },
+        {
+          "class": "Suspek Dengue",
+          "rows": 858,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.5303,
+          "anchor_coverage": 0.8869,
+          "reliable": true
+        },
+        {
+          "class": "Diare Akut",
+          "rows": 750,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.9907,
+          "anchor_coverage": 0.9147,
+          "reliable": true
+        },
+        {
+          "class": "Acute Flaccid Paralysis",
+          "rows": 351,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.7493,
+          "anchor_coverage": 0.8006,
+          "reliable": true
+        },
+        {
+          "class": "Sindrom Jaundice Akut",
+          "rows": 132,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.8864,
+          "anchor_coverage": 0.553,
+          "reliable": true
+        },
+        {
+          "class": "Suspek HFMD",
+          "rows": 65,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.6462,
+          "anchor_coverage": 0.8308,
+          "reliable": true
+        },
+        {
+          "class": "GHPR",
+          "rows": 25,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.96,
+          "reliable": false
+        },
+        {
+          "class": "Suspek Tetanus",
+          "rows": 24,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.9583,
+          "anchor_coverage": 0.7917,
+          "reliable": false
+        },
+        {
+          "class": "Suspek Leptospirosis",
+          "rows": 14,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.9286,
+          "anchor_coverage": 0.7857,
+          "reliable": false
+        },
+        {
+          "class": "Diare Berdarah",
+          "rows": 9,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.8889,
+          "anchor_coverage": 0.6667,
+          "reliable": false
+        },
+        {
+          "class": "Suspek Meningitis/Ensefalitis",
+          "rows": 8,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.375,
+          "reliable": false
+        }
+      ],
+      "text_baseline": {
+        "accuracy": 0.8077,
+        "f1_macro_all": 0.5686,
+        "f1_macro_reliable": 0.7604,
+        "top_confusions": [
+          {
+            "count": 9,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Pneumonia/ISPA"
+          },
+          {
+            "count": 7,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 7,
+            "true": "Pneumonia/ISPA",
+            "predicted": "COVID-19 Konfirmasi"
+          },
+          {
+            "count": 7,
+            "true": "Pneumonia/ISPA",
+            "predicted": "Suspek Dengue"
+          },
+          {
+            "count": 6,
+            "true": "Acute Flaccid Paralysis",
+            "predicted": "COVID-19 Konfirmasi"
+          },
+          {
+            "count": 6,
+            "true": "Pneumonia/ISPA",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 5,
+            "true": "Suspek Dengue",
+            "predicted": "COVID-19 Konfirmasi"
+          },
+          {
+            "count": 5,
+            "true": "Suspek Dengue",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 4,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Acute Flaccid Paralysis"
+          },
+          {
+            "count": 4,
+            "true": "Diare Akut",
+            "predicted": "Pneumonia/ISPA"
+          },
+          {
+            "count": 4,
+            "true": "Suspek Dengue",
+            "predicted": "Acute Flaccid Paralysis"
+          },
+          {
+            "count": 3,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Suspek Dengue"
+          }
+        ]
+      },
+      "metadata_baselines": {
+        "clinical_metadata_only": {
+          "accuracy": 0.0855,
+          "f1_macro_all": 0.0565,
+          "f1_macro_reliable": 0.0937
+        },
+        "source_style_only": {
+          "accuracy": 0.3355,
+          "f1_macro_all": 0.0639,
+          "f1_macro_reliable": 0.1079
+        },
+        "all_metadata": {
+          "accuracy": 0.235,
+          "f1_macro_all": 0.1188,
+          "f1_macro_reliable": 0.1905
+        }
+      }
+    },
+    "v4": {
+      "summary": {
+        "version": "v4",
+        "rows_before_split": 4840,
+        "rows_written": 4840,
+        "rows_lost_during_split": 0,
+        "split_rows": {
+          "train": 3385,
+          "val": 728,
+          "test": 727
+        },
+        "n_classes": 12,
+        "stage_counts": {
+          "raw_loaded": 5933,
+          "after_icd_labeling": 5854,
+          "after_v2_cleaning": 5272,
+          "final_before_split": 4840
+        },
+        "empty_rows": 0,
+        "rows_in_duplicate_templates": 84,
+        "duplicate_template_groups": 32,
+        "conflicting_template_groups": 0,
+        "conflicting_template_rows": 0,
+        "multi_class_patient_ids": 133,
+        "rows_from_multi_class_patients": 401,
+        "patient_overlap_groups": 0,
+        "template_overlap_groups": 0,
+        "median_words": 34.0,
+        "p95_words": 100.0
+      },
+      "class_profile": [
+        {
+          "class": "Pneumonia/ISPA",
+          "rows": 1575,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.974,
+          "anchor_coverage": 0.8806,
+          "reliable": true
+        },
+        {
+          "class": "COVID-19 Konfirmasi",
+          "rows": 1058,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.914,
+          "reliable": true
+        },
+        {
+          "class": "Diare Akut",
+          "rows": 806,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.9913,
+          "anchor_coverage": 0.9256,
+          "reliable": true
+        },
+        {
+          "class": "Suspek Dengue",
+          "rows": 766,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.5274,
+          "anchor_coverage": 0.9282,
+          "reliable": true
+        },
+        {
+          "class": "Acute Flaccid Paralysis",
+          "rows": 332,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.7229,
+          "anchor_coverage": 0.8494,
+          "reliable": true
+        },
+        {
+          "class": "Sindrom Jaundice Akut",
+          "rows": 138,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.8551,
+          "anchor_coverage": 0.5507,
+          "reliable": true
+        },
+        {
+          "class": "Suspek HFMD",
+          "rows": 76,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.6842,
+          "anchor_coverage": 0.8289,
+          "reliable": true
+        },
+        {
+          "class": "Suspek Tetanus",
+          "rows": 28,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.8571,
+          "anchor_coverage": 0.7857,
+          "reliable": false
+        },
+        {
+          "class": "GHPR",
+          "rows": 25,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.96,
+          "reliable": false
+        },
+        {
+          "class": "Diare Berdarah",
+          "rows": 14,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 0.9286,
+          "anchor_coverage": 0.8571,
+          "reliable": false
+        },
+        {
+          "class": "Suspek Leptospirosis",
+          "rows": 14,
+          "largest_source": "RS_AKADEMIK_UGM",
+          "largest_source_share": 0.9286,
+          "anchor_coverage": 0.7857,
+          "reliable": false
+        },
+        {
+          "class": "Suspek Meningitis/Ensefalitis",
+          "rows": 8,
+          "largest_source": "RSUD_NAS",
+          "largest_source_share": 1.0,
+          "anchor_coverage": 0.375,
+          "reliable": false
+        }
+      ],
+      "text_baseline": {
+        "accuracy": 0.8377,
+        "f1_macro_all": 0.5539,
+        "f1_macro_reliable": 0.8067,
+        "top_confusions": [
+          {
+            "count": 12,
+            "true": "Pneumonia/ISPA",
+            "predicted": "Suspek Dengue"
+          },
+          {
+            "count": 11,
+            "true": "Diare Akut",
+            "predicted": "Pneumonia/ISPA"
+          },
+          {
+            "count": 11,
+            "true": "Suspek Dengue",
+            "predicted": "COVID-19 Konfirmasi"
+          },
+          {
+            "count": 10,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Pneumonia/ISPA"
+          },
+          {
+            "count": 8,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Suspek Dengue"
+          },
+          {
+            "count": 8,
+            "true": "Suspek Dengue",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 6,
+            "true": "Suspek Dengue",
+            "predicted": "Pneumonia/ISPA"
+          },
+          {
+            "count": 5,
+            "true": "Acute Flaccid Paralysis",
+            "predicted": "COVID-19 Konfirmasi"
+          },
+          {
+            "count": 5,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 5,
+            "true": "Pneumonia/ISPA",
+            "predicted": "Diare Akut"
+          },
+          {
+            "count": 3,
+            "true": "COVID-19 Konfirmasi",
+            "predicted": "Sindrom Jaundice Akut"
+          },
+          {
+            "count": 3,
+            "true": "Pneumonia/ISPA",
+            "predicted": "COVID-19 Konfirmasi"
+          }
+        ]
+      },
+      "metadata_baselines": {
+        "clinical_metadata_only": {
+          "accuracy": 0.0922,
+          "f1_macro_all": 0.0583,
+          "f1_macro_reliable": 0.0955
+        },
+        "source_style_only": {
+          "accuracy": 0.2242,
+          "f1_macro_all": 0.0636,
+          "f1_macro_reliable": 0.1061
+        },
+        "all_metadata": {
+          "accuracy": 0.2338,
+          "f1_macro_all": 0.1393,
+          "f1_macro_reliable": 0.2253
+        }
+      }
+    }
+  },
+  "method": {
+    "raw_text_in_report": false
+  },
+  "v4_quality_actions": {
+    "conflicting_template_labels": 6,
+    "control_without_clinical_signal": 1,
+    "duplicate_patient_visit": 310,
+    "empty_text": 106,
+    "kept": 4840,
+    "short_text_without_clinical_signal": 9
+  }
+}

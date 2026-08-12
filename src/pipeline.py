@@ -5,11 +5,15 @@ data/processed/<version>/{train,val,test}.csv.
 Dipanggil sbg:  python -m src.pipeline --data-version v1
                 python -m src.pipeline --data-version v2
                 python -m src.pipeline --data-version v3
+                python -m src.pipeline --data-version v4
 
 v1 = ingest + label saja (ISPA & Pneumonia masih terpisah, noise blm dibersihkan)
 v2 = v1 + remove_control_visits_without_complaint + remove_incidental_covid
 v3 = v2 + merge_pneumonia_into_ispa + flag_unreliable_classes (kelas final = 12,
      sama seperti daftar 'classes' di config/experiment.yaml)
+v4 = v3 + filter kualitas berbasis bukti + normalisasi metadata + split grouped
+     by pasien/template. Taksonomi tetap 12 kelas; tidak ada kelas langka yang
+     dihapus untuk menaikkan skor.
 
 Training (src/train.py) TIDAK dipanggil dari sini -- tahap training butuh GPU
 (Kaggle), jadi sengaja dipisah supaya tahap data (murah, CPU-only) bisa
@@ -38,16 +42,20 @@ def log_run(record: dict, runs_path: str = "experiments/runs.jsonl") -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def build_dataset(data_version: str, cfg: dict) -> tuple[pd.DataFrame, dict]:
-    """Return (all_labeled_df_before_split, timing_per_stage)."""
+def build_dataset(data_version: str, cfg: dict):
+    """Return data, timing, ICD audit, V4 quality audit, and stage counts."""
     timing = {}
+    stage_counts = {}
+    quality_audit = pd.DataFrame(columns=["reason", "final_class", "source", "n_rows"])
 
     t0 = time.time()
     raw_df = ingest.load_all_raw(cfg["paths"])
+    stage_counts["raw_loaded"] = len(raw_df)
     timing["ingest_sec"] = round(time.time() - t0, 2)
 
     t0 = time.time()
     labeled_df, drop_summary = label_mod.apply_labels(raw_df)
+    stage_counts["after_icd_labeling"] = len(labeled_df)
     labeled_df["anamnesa"] = labeled_df["anamnesa"].apply(clean.clean_anamnesa_text)
 
     # Safety check: label.py dirancang supaya HANYA pernah menghasilkan 12 kelas
@@ -63,16 +71,23 @@ def build_dataset(data_version: str, cfg: dict) -> tuple[pd.DataFrame, dict]:
     timing["label_sec"] = round(time.time() - t0, 2)
 
     t0 = time.time()
-    if data_version in ("v2", "v3"):
+    if data_version in ("v2", "v3", "v4"):
         labeled_df = clean.remove_control_visits_without_complaint(labeled_df)
         labeled_df = clean.remove_incidental_covid(labeled_df)
-    if data_version == "v3":
+    stage_counts["after_v2_cleaning"] = len(labeled_df)
+    if data_version == "v4":
+        labeled_df, quality_audit = clean.apply_v4_quality_filters(labeled_df)
+        # Dedup membutuhkan ID asli, tetapi CSV/Kaggle dataset tidak. Hash ID
+        # sebelum split/penulisan agar nomor RM mentah tidak keluar dari tahap build.
+        labeled_df = clean.pseudonymize_record_ids(labeled_df)
+    if data_version in ("v3", "v4"):
         labeled_df = clean.flag_unreliable_classes(
             labeled_df, min_support=cfg.get("min_support_reliable", 30)
         )
+    stage_counts["final_before_split"] = len(labeled_df)
     timing["clean_sec"] = round(time.time() - t0, 2)
 
-    return labeled_df, timing, drop_summary
+    return labeled_df, timing, drop_summary, quality_audit, stage_counts
 
 
 def main(data_version: str, config_path: str = "config/experiment.yaml",
@@ -82,14 +97,13 @@ def main(data_version: str, config_path: str = "config/experiment.yaml",
     os.makedirs(output_dir, exist_ok=True)
 
     t_start = time.time()
-    labeled_df, timing, drop_summary = build_dataset(data_version, cfg)
+    labeled_df, timing, drop_summary, quality_audit, stage_counts = build_dataset(data_version, cfg)
 
     t0 = time.time()
     sp = cfg["split"]
-    train_df, val_df, test_df = split_mod.stratified_split(
-        labeled_df,
-        ratios=(sp["train"], sp["val"], sp["test"]),
-        seed=cfg["seed"],
+    split_fn = split_mod.stratified_group_split if data_version == "v4" else split_mod.stratified_split
+    train_df, val_df, test_df = split_fn(
+        labeled_df, ratios=(sp["train"], sp["val"], sp["test"]), seed=cfg["seed"]
     )
     timing["split_sec"] = round(time.time() - t0, 2)
     timing["total_sec"] = round(time.time() - t_start, 2)
@@ -109,6 +123,7 @@ def main(data_version: str, config_path: str = "config/experiment.yaml",
         json.dump(class_dist, f, ensure_ascii=False, indent=2)
 
     drop_summary.to_csv(os.path.join(output_dir, "dropped_icd_summary.csv"), index=False)
+    quality_audit.to_csv(os.path.join(output_dir, "quality_audit.csv"), index=False)
 
     summary = {
         "data_version": data_version,
@@ -117,6 +132,9 @@ def main(data_version: str, config_path: str = "config/experiment.yaml",
         "n_val": len(val_df),
         "n_test": len(test_df),
         "n_classes": labeled_df["final_class"].nunique(),
+        "n_rows_written": len(train_df) + len(val_df) + len(test_df),
+        "n_rows_lost_during_split": len(labeled_df) - (len(train_df) + len(val_df) + len(test_df)),
+        "stage_counts": stage_counts,
         "timing_per_stage": timing,
         "output_dir": output_dir,
     }
@@ -129,7 +147,7 @@ def main(data_version: str, config_path: str = "config/experiment.yaml",
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-version", choices=["v1", "v2", "v3"], required=True)
+    parser.add_argument("--data-version", choices=["v1", "v2", "v3", "v4"], required=True)
     parser.add_argument("--config", default="config/experiment.yaml")
     args = parser.parse_args()
     main(args.data_version, args.config)

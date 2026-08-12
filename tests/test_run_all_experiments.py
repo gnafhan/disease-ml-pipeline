@@ -21,12 +21,10 @@ RUNS_PATH = "experiments/runs.jsonl"
 
 
 @pytest.fixture(autouse=True)
-def clean_runs_file():
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
+def isolated_working_directory(tmp_path, monkeypatch):
+    """Jangan pernah menulis/menghapus experiments/runs.jsonl milik repo."""
+    monkeypatch.chdir(tmp_path)
     yield
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
 
 
 def _fake_train_run_factory(call_log, fail_on=()):
@@ -71,6 +69,26 @@ def test_only_filter_runs_subset():
         sys.argv = ["run_all_experiments.py", "--only", "v1_large,v3_base", "--no-generate-report"]
         rae.main()
     assert call_log == ["v1_large", "v3_base"]
+
+
+def test_only_filter_accepts_v4_without_changing_legacy_default_matrix():
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)):
+        sys.argv = ["run_all_experiments.py", "--only", "v4_base,v4_large", "--no-generate-report"]
+        rae.main()
+    assert call_log == ["v4_base", "v4_large"]
+
+
+def test_full_run_is_not_skipped_by_old_smoke_test_record():
+    os.makedirs("experiments", exist_ok=True)
+    with open(RUNS_PATH, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"run_id": "v1_base", "smoke_test": True}) + "\n")
+
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base", "--skip-existing", "--no-generate-report"]
+        rae.main()
+    assert call_log == ["v1_base"]
 
 
 def test_only_filter_rejects_unknown_run_id():
@@ -187,14 +205,20 @@ def test_push_hf_one_failure_does_not_stop_others(monkeypatch, capsys):
 
     call_log = []
     with mock.patch("src.train.run", _fake_train_run_factory(call_log)), \
-         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf) as push_mock, \
+         mock.patch("src.run_all_experiments.time.sleep"):
         sys.argv = ["run_all_experiments.py", "--only", "v1_base,v2_large",
                     "--push-hf", "someuser/pkt-indobert", "--no-generate-report"]
         result = rae.main()
 
     assert len(result["ok"]) == 2, "kombinasi training tetap 2/2 berhasil walau push-hf v1_base gagal"
+    assert result["failed"] == [{
+        "run_id": "v1_base", "stage": "push_hf",
+        "error": "simulated HF network error",
+    }]
+    assert push_mock.call_count == 4  # v1 tiga retry + v2 satu kali
     out = capsys.readouterr().out
-    assert "GAGAL push 'v1_base'" in out
+    assert "GAGAL permanen 'v1_base'" in out
     assert "someuser/pkt-indobert-v2-large" in out
 
 

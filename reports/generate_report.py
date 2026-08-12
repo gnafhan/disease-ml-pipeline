@@ -26,7 +26,7 @@ MATRIX_COLUMNS = [
 ]
 
 
-_CANONICAL_RUN_ORDER = [f"{dv}_{mk}" for dv in ("v1", "v2", "v3") for mk in ("base", "large")]
+_CANONICAL_RUN_ORDER = [f"{dv}_{mk}" for dv in ("v1", "v2", "v3", "v4") for mk in ("base", "large")]
 
 
 def load_runs(path: str = RUNS_PATH) -> list[dict]:
@@ -101,7 +101,7 @@ def main():
     runs = load_runs()
     matrix = build_matrix_table(runs)
 
-    lines = ["# Matriks Perbandingan -- 6 Iterasi (data-v1/v2/v3 x model-base/large)\n"]
+    lines = ["# Matriks Perbandingan -- data-v1/v2/v3/v4 x model-base/large\n"]
     if not runs:
         lines.append("> Belum ada run yang selesai. Semua 6 kombinasi butuh training GPU "
                       "(jalankan di Kaggle -- lihat README.md). Tabel di bawah cuma kerangka.\n")

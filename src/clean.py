@@ -14,8 +14,10 @@ kontrol/post ranap dihapus?", "Kenapa COVID incidental dihapus?").
 
 from __future__ import annotations
 
+import hashlib
 import re
 import logging
+import unicodedata
 
 import pandas as pd
 
@@ -55,6 +57,32 @@ _COVID_RELEVANT_MARKERS = [
 ]
 
 
+# Marker ini bukan pengganti label ICD dan tidak dipakai untuk me-relabel data.
+# Fungsinya hanya sebagai guard kualitas V4: catatan kontrol/teks sangat pendek
+# tanpa satu pun sinyal yang selaras dengan kelasnya tidak cukup informatif untuk
+# supervised learning. Polanya sengaja lebar agar false-drop tetap rendah.
+V4_CLASS_ANCHOR_PATTERNS: dict[str, str] = {
+    "Pneumonia/ISPA": r"batuk|pilek|sesak|napas|nafas|ronk|wheez|ispa|pneum|saturasi|spo2|dahak",
+    "Suspek Dengue": r"dbd|dengue|trombosit|peteki|petech|mimisan|gusi berdarah|rumple|tourniquet|nyeri.{0,15}mata|demam",
+    "COVID-19 Konfirmasi": r"covid|corona|pcr|antigen|swab|anosmia|ageusia|isoman|kontak erat|batuk|demam|sesak",
+    "Diare Akut": r"diare|mencret|bab cair|berak cair|feses cair|muntah",
+    "Diare Berdarah": r"diare|mencret|bab cair|berak cair|feses cair|darah|lendir",
+    "Acute Flaccid Paralysis": r"lumpuh|kelemahan|layuh|kesemutan|kebas|baal|parese|paral|sulit berjalan|tidak bisa berjalan|tangan|kaki",
+    "Sindrom Jaundice Akut": r"kuning|ikter|jaundice|hepatitis|bilirubin|hbsag",
+    "Suspek HFMD": r"hfmd|hand foot|tangan.{0,30}kaki.{0,30}mulut|kaki.{0,30}tangan.{0,30}mulut|sariawan|vesikel|ruam|bintik",
+    "Suspek Tetanus": r"tetanus|trismus|kaku|rahang|sulit menelan|kejang|tertusuk",
+    "GHPR": r"gigit|digigit|gigitan|anjing|kucing|monyet|rabies|luka",
+    "Suspek Leptospirosis": r"lepto|nyeri betis|mata merah|tikus|banjir|demam",
+    "Suspek Meningitis/Ensefalitis": r"mening|ensefal|kaku kuduk|penurunan kesadaran|tidak sadar|kejang|sakit kepala|nyeri leher",
+}
+
+_V4_CONTROL_PATTERN = re.compile(
+    r"\b(?:kontrol|post ranap|post mrs|post rawat|post opname|tanpa keluhan|"
+    r"tidak ada keluhan|tdk ada keluhan)\b",
+    re.IGNORECASE,
+)
+
+
 def clean_anamnesa_text(text) -> str:
     """Buang header SOAP (KU:/RPS:/RPD:/dst) dari teks Subjective RS Akademik.
     Aman dijalankan di teks RSUD juga -- kalau tidak ada header, teks dikembalikan
@@ -65,6 +93,160 @@ def clean_anamnesa_text(text) -> str:
     t = SOAP_HEADER_PATTERN.sub(" ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+
+def normalize_anamnesa_v4(text) -> str:
+    """Normalisasi teks konservatif untuk V4 tanpa menghapus informasi klinis.
+
+    NFKC merapikan variasi Unicode, karakter kontrol dibuang, dan whitespace
+    disatukan. Huruf/angka dan isi anamnesis tetap dipertahankan agar transform
+    ini tidak mengubah makna klinis.
+    """
+    t = clean_anamnesa_text(text)
+    t = unicodedata.normalize("NFKC", t)
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def canonicalize_anamnesa(text) -> str:
+    """Representasi privacy-safe-in-memory untuk deteksi template/duplikat.
+
+    Angka diganti token umum agar perbedaan tanggal/nilai lab saja tidak membuat
+    dua template identik terlihat berbeda. Nilai ini hanya helper dan tidak
+    disimpan ke CSV hasil.
+    """
+    t = normalize_anamnesa_v4(text).lower()
+    t = re.sub(r"\d+(?:[.,]\d+)?", "<n>", t)
+    t = re.sub(r"[^a-z<>]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def has_v4_class_anchor(text: str, class_name: str) -> bool:
+    pattern = V4_CLASS_ANCHOR_PATTERNS.get(class_name)
+    return bool(pattern and re.search(pattern, text.lower()))
+
+
+def has_v4_clinical_signal(text: str) -> bool:
+    """Deteksi sinyal klinis tanpa melihat label target baris."""
+    normalized = text.lower()
+    return _contains_any(normalized, _ACTIVE_SYMPTOM_KEYWORDS) or any(
+        re.search(pattern, normalized)
+        for pattern in V4_CLASS_ANCHOR_PATTERNS.values()
+    )
+
+
+def normalize_metadata_v4(df: pd.DataFrame) -> pd.DataFrame:
+    """Rapikan metadata kategorikal/numerik; nilai invalid menjadi missing."""
+    out = df.copy()
+    sex_map = {
+        "L": "L", "M": "L", "MALE": "L", "LAKI-LAKI": "L", "LAKI LAKI": "L",
+        "P": "P", "F": "P", "FEMALE": "P", "PEREMPUAN": "P", "WANITA": "P",
+    }
+    out["sex"] = out["sex"].apply(
+        lambda value: sex_map.get(str(value).strip().upper()) if pd.notna(value) else None
+    )
+    out["age_years"] = pd.to_numeric(out["age_years"], errors="coerce")
+    out.loc[~out["age_years"].between(0, 110), "age_years"] = None
+    out["bulan_kunjung"] = pd.to_numeric(out["bulan_kunjung"], errors="coerce")
+    out.loc[~out["bulan_kunjung"].between(1, 12), "bulan_kunjung"] = None
+    out["visit_type"] = (
+        out["visit_type"].astype(str).str.strip().str.upper()
+        .replace({"RAWAT INAP": "RAWAT INAP", "RAWAT JALAN": "RAWAT JALAN"})
+    )
+    return out
+
+
+def pseudonymize_record_ids(
+    df: pd.DataFrame,
+    record_id_col: str = "record_id",
+    source_col: str = "source",
+) -> pd.DataFrame:
+    """Ganti identifier sumber dengan SHA-256 sebelum data V4 ditulis ke disk.
+
+    Hash mencakup source agar namespace nomor pasien antar-RS tidak tertukar.
+    Ini pseudonymization, bukan anonymization: data tetap harus diperlakukan
+    sensitif dan dataset Kaggle tetap wajib private.
+    """
+    out = df.copy()
+
+    def digest(source, record_id):
+        if pd.isna(record_id) or str(record_id).strip().lower() in {"", "nan", "none"}:
+            return None
+        payload = f"{source}\x1f{str(record_id).strip()}".encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    out[record_id_col] = [
+        digest(source, record_id)
+        for source, record_id in zip(out[source_col], out[record_id_col])
+    ]
+    return out
+
+
+def apply_v4_quality_filters(
+    df: pd.DataFrame,
+    text_col: str = "anamnesa",
+    class_col: str = "final_class",
+    record_id_col: str = "record_id",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Terapkan filter V4 dan return ``(kept, aggregate_audit)``.
+
+    Tidak ada relabel atau selection berbasis keyword kelas. Baris hanya dibuang untuk failure mode
+    yang bisa diaudit: teks kosong, teks <=2 token tanpa anchor kelas, catatan
+    kontrol tanpa anchor kelas, template yang identik tetapi berlabel konflik,
+    atau kunjungan pasien yang identik berulang. Audit hanya berisi agregat;
+    teks dan record_id pasien tidak pernah ditulis ke report.
+    """
+    out = normalize_metadata_v4(df)
+    out[text_col] = out[text_col].apply(normalize_anamnesa_v4)
+    canonical = out[text_col].apply(canonicalize_anamnesa)
+    word_count = canonical.str.split().str.len().fillna(0).astype(int)
+    class_anchor_match = pd.Series(
+        [has_v4_class_anchor(text, cls) for text, cls in zip(out[text_col], out[class_col])],
+        index=out.index,
+    )
+    clinical_signal = out[text_col].apply(has_v4_clinical_signal)
+    reason = pd.Series("", index=out.index, dtype="object")
+
+    reason.loc[word_count.eq(0)] = "empty_text"
+    reason.loc[reason.eq("") & word_count.le(2) & ~clinical_signal] = "short_text_without_clinical_signal"
+    is_control = out[text_col].str.contains(_V4_CONTROL_PATTERN, na=False)
+    reason.loc[reason.eq("") & is_control & ~clinical_signal] = "control_without_clinical_signal"
+
+    eligible = reason.eq("")
+    conflict_counts = out.loc[eligible].assign(_canonical=canonical[eligible]).groupby(
+        "_canonical"
+    )[class_col].nunique()
+    conflicting_templates = set(conflict_counts[conflict_counts > 1].index)
+    reason.loc[reason.eq("") & canonical.isin(conflicting_templates)] = "conflicting_template_labels"
+
+    # Hanya dedup pengulangan pasien+kelas+teks yang sama. Template identik pada
+    # pasien berbeda tetap dipertahankan, tetapi split V4 menyatukannya ke group
+    # yang sama agar tidak bocor antar train/val/test.
+    eligible = reason.eq("")
+    duplicate_visit = out.loc[eligible].assign(_canonical=canonical[eligible]).duplicated(
+        [record_id_col, class_col, "_canonical"], keep="first"
+    )
+    reason.loc[duplicate_visit[duplicate_visit].index] = "duplicate_patient_visit"
+
+    audit_base = out[[class_col, "source"]].copy()
+    audit_base["reason"] = reason.replace("", "kept")
+    audit = (
+        audit_base.groupby(["reason", class_col, "source"], dropna=False)
+        .size().reset_index(name="n_rows")
+        .sort_values(["reason", "n_rows"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
+
+    kept = out.loc[reason.eq("")].copy().reset_index(drop=True)
+    # Diagnostic-only: tidak pernah dipakai untuk memutuskan baris kept/drop.
+    kept["v4_anchor_match"] = class_anchor_match.loc[reason.eq("")].to_numpy()
+    kept["v4_word_count"] = word_count.loc[reason.eq("")].to_numpy()
+    logger.info(
+        "apply_v4_quality_filters: %d -> %d baris; drop=%s",
+        len(out), len(kept),
+        reason[reason.ne("")].value_counts().to_dict(),
+    )
+    return kept, audit
 
 
 def _contains_any(text: str, keywords: list[str]) -> bool:

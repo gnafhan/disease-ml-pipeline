@@ -34,14 +34,11 @@ def _write_runs(records, path=RUNS_PATH):
             f.write(json.dumps(r) + "\n")
 
 
-def setup_function(_):
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
-
-
-def teardown_function(_):
-    if os.path.exists(RUNS_PATH):
-        os.remove(RUNS_PATH)
+@pytest.fixture(autouse=True)
+def isolated_working_directory(tmp_path, monkeypatch):
+    """Hugging Face unit tests must not mutate the repo's real run log."""
+    monkeypatch.chdir(tmp_path)
+    yield
 
 
 def test_dynamic_repo_id_replaces_underscore_with_hyphen():

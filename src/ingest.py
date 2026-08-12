@@ -95,6 +95,36 @@ def _rename_and_select(df: pd.DataFrame, col_map: dict, extra: dict) -> pd.DataF
     return out.drop(columns=["age", "date"])
 
 
+def _parse_sheet_with_adaptive_header(
+    xl: pd.ExcelFile,
+    sheet: str,
+    expected_columns: set[str],
+    max_header_scan_rows: int = 15,
+) -> tuple[pd.DataFrame, int]:
+    """Parse sheet RSUD yang header tabelnya kadang tidak berada di baris 1.
+
+    Delapan sheet sumber memiliki judul/logo RS di atas tabel. Parse default
+    menjadikan judul itu sebagai nama kolom dan sebelumnya membuat sekitar 25
+    kunjungan tidak pernah masuk pipeline. Fungsi ini mencari baris yang berisi
+    sekurangnya ``Anamnesa`` dan salah satu identifier/ICD yang di-whitelist.
+    Return ``(dataframe, header_row_zero_based)``.
+    """
+    usecols = lambda column: column in expected_columns
+    parsed = xl.parse(sheet, usecols=usecols)
+    if "Anamnesa" in parsed.columns and len(expected_columns & set(parsed.columns)) >= 2:
+        return parsed, 0
+
+    preview = xl.parse(sheet, header=None, nrows=max_header_scan_rows)
+    identifier_columns = {"Kode ICD", "ICD Code", "No. RM"}
+    for row_idx, row in preview.iterrows():
+        values = {str(value).strip() for value in row.dropna()}
+        if "Anamnesa" in values and values & identifier_columns:
+            reparsed = xl.parse(sheet, header=int(row_idx), usecols=usecols)
+            logger.info("Adaptive header: sheet %s memakai header Excel baris %d", sheet, row_idx + 1)
+            return reparsed, int(row_idx)
+    return parsed, 0
+
+
 def load_rsud_nas_folder(folder: str, kategori: str) -> IngestResult:
     """
     folder: path langsung ke folder RAWAT JALAN atau RAWAT INAP (dari
@@ -123,9 +153,9 @@ def load_rsud_nas_folder(folder: str, kategori: str) -> IngestResult:
             raise RuntimeError(f"Gagal buka {fpath}: {e}") from e
 
         for sheet in xl.sheet_names:
-            usecols = [c for c in col_map.values() if c != icd_col_name] + [icd_col_name]
+            expected_columns = set(col_map.values())
             try:
-                raw = xl.parse(sheet, usecols=lambda c: c in usecols)
+                raw, _header_row = _parse_sheet_with_adaptive_header(xl, sheet, expected_columns)
             except Exception as e:
                 logger.warning("Sheet %s di %s gagal dibaca penuh (%s), coba tanpa usecols filter", sheet, fname, e)
                 raw = xl.parse(sheet)

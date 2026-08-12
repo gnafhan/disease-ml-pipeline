@@ -49,6 +49,7 @@ DATASET_GLOB = "/kaggle/input/**/pkt-processed-data"
 # Repo ini publik. Fallback ini hanya dipakai bila layanan Kaggle Secrets
 # sementara tidak dapat dihubungi; Secret GITHUB_REPO tetap menang bila tersedia.
 PUBLIC_GITHUB_REPO = "gnafhan/disease-ml-pipeline"
+RUN_IDS = ["v3_base", "v3_large", "v4_base", "v4_large"]
 
 
 def _try_secret(client: UserSecretsClient, name: str) -> str | None:
@@ -94,6 +95,25 @@ def install_requirements() -> None:
     )
 
 
+def validate_hf_push_target() -> None:
+    """Fail sebelum GPU bila Secret/token/repo Hugging Face tidak writable."""
+    from huggingface_hub import HfApi, create_repo
+
+    token = os.environ.get("HF_TOKEN")
+    repo_base = os.environ.get("HF_REPO_ID")
+    if not token or not repo_base:
+        raise RuntimeError(
+            "HF_TOKEN dan HF_REPO_ID wajib tersedia. Training dibatalkan sebelum GPU "
+            "agar model tidak selesai tanpa bisa di-push."
+        )
+    account = HfApi(token=token).whoami()
+    for run_id in RUN_IDS:
+        repo_id = f"{repo_base}-{run_id.replace('_', '-')}"
+        create_repo(repo_id, token=token, private=True, exist_ok=True)
+    print(f"[kernel] Hugging Face write access OK untuk {account.get('name', 'account')} "
+          f"dan {len(RUN_IDS)} repo private.")
+
+
 def stage_processed_data() -> None:
     matches = [m for m in glob.glob(DATASET_GLOB, recursive=True) if os.path.isdir(m)]
     assert matches, (
@@ -109,16 +129,23 @@ def stage_processed_data() -> None:
 
 
 def run_experiments() -> None:
-    # Smoke-test seluruh kombinasi sudah lulus. Rerun penuh ini sengaja tanpa
-    # --skip-existing agar hasil historis (sebelum perbaikan metrik) diganti.
-    smoke_test = False
-    cmd = [sys.executable, "-m", "src.run_all_experiments", "--push-git"]
-    if smoke_test:
-        cmd.append("--smoke-test")
-    if os.environ.get("HF_REPO_ID"):
-        cmd += ["--push-hf", os.environ["HF_REPO_ID"], "--push-hf-cleanup-local"]
-    print("[kernel] menjalankan:", " ".join(cmd))
-    subprocess.run(cmd, cwd=REPO_DIR, check=True)
+    """Smoke seluruh target dahulu, lalu train V3/V4 base+large saja."""
+    only = ",".join(RUN_IDS)
+    preflight = [
+        sys.executable, "-m", "src.run_all_experiments",
+        "--only", only, "--smoke-test", "--push-git",
+    ]
+    print("[kernel] preflight:", " ".join(preflight))
+    subprocess.run(preflight, cwd=REPO_DIR, check=True)
+
+    full = [
+        sys.executable, "-m", "src.run_all_experiments",
+        "--only", only, "--push-git",
+        "--push-hf", os.environ["HF_REPO_ID"],
+        "--push-hf-private", "--push-hf-cleanup-local",
+    ]
+    print("[kernel] full training:", " ".join(full))
+    subprocess.run(full, cwd=REPO_DIR, check=True)
 
 
 def export_results() -> None:
@@ -135,6 +162,12 @@ def export_results() -> None:
         source = os.path.join(REPO_DIR, relative_path)
         if os.path.isfile(source):
             shutil.copy2(source, os.path.join(destination, os.path.basename(source)))
+    # Kalau HuggingFace Secret gagal, model jangan ikut hilang saat kernel mati.
+    # Move (bukan copy) supaya tidak menggandakan pemakaian disk Kaggle.
+    for run_id in RUN_IDS:
+        model_dir = os.path.join(REPO_DIR, "experiments", run_id)
+        if os.path.isdir(model_dir):
+            shutil.move(model_dir, os.path.join(destination, run_id))
     print(f"[kernel] hasil ringkas diekspor ke {destination}")
 
 
@@ -143,9 +176,12 @@ def main() -> None:
     repo_url = build_repo_url()
     clone_repo(repo_url)
     install_requirements()
+    validate_hf_push_target()
     stage_processed_data()
-    run_experiments()
-    export_results()
+    try:
+        run_experiments()
+    finally:
+        export_results()
     print("[kernel] SELESAI. runs.jsonl & reports sudah ke-push ke GitHub "
           "(kalau --push-git aktif); model sudah ke-push ke HuggingFace "
           "(kalau --push-hf aktif). Cek juga output kernel ini via "

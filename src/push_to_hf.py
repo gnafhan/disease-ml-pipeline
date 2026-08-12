@@ -122,7 +122,7 @@ tags:
 Model klasifikasi penyakit dari teks anamnesa Bahasa Indonesia (skrining awal
 / surveilans), fine-tuned dari `{run.get('model_name', '?')}`.
 
-Salah satu dari 6 kombinasi (data-v1/v2/v3 x model-base/large) di pipeline
+Salah satu kombinasi data/model di pipeline
 [disease-ml-pipeline](https://github.com/gnafhan/disease-ml-pipeline) --
 tiap kombinasi punya repo HuggingFace sendiri (lihat repo lain dgn prefix
 nama yang sama utk perbandingan versi data/model lainnya).
@@ -267,7 +267,10 @@ def main():
             print(f"OK    {r['run_id']} -> https://huggingface.co/{r['repo_id']}")
         else:
             print(f"GAGAL {r['run_id']}: {r['error']}")
+    return results
 
 
 if __name__ == "__main__":
-    main()
+    push_results = main()
+    if push_results and any(not result["ok"] for result in push_results):
+        raise SystemExit(1)

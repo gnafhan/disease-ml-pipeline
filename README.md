@@ -19,12 +19,11 @@ Claude, cek chat/artifact terkait.
 - [x] `src/label.py` -- **rekonstruksi mapping ICD->kelas, lihat catatan penting di bawah**
 - [x] `src/clean.py` -- **sudah jalan & tervalidasi**
 - [x] `src/split.py` -- **sudah jalan** (tanpa dependency scikit-learn, lihat catatan)
-- [x] `src/pipeline.py` -- **data-v1/v2/v3 SUDAH ter-generate nyata**, lihat `data/processed/`
-- [x] `src/train.py` -- **smoke-test SUDAH lolos di Kaggle GPU (semua 6 kombinasi)**;
-      training PENUH (tanpa `--smoke-test`) belum pernah dituntaskan sampai
-      selesai -- lihat bagian Training buat status terbaru
+- [x] `src/pipeline.py` -- **data-v1/v2/v3/v4 sudah ter-generate nyata**, lihat `data/processed/`
+- [x] `src/train.py` -- **6 training legacy v1/v2/v3 sudah selesai di Kaggle**;
+      run berikutnya dibatasi ke V3/V4 base+large dengan smoke gate dan push HF wajib
 - [x] `src/evaluate.py` -- kode lengkap, teruji dgn data sintetis
-- [x] `src/run_all_experiments.py` -- entrypoint Kaggle, orkestrasi 6 kombinasi
+- [x] `src/run_all_experiments.py` -- entrypoint Kaggle, 6 kombinasi lama + V4 via `--only`
       teruji (training di-mock di test, tapi orkestrasinya sendiri sudah
       jalan sungguhan di Kaggle); `--push-git` backup progress ke GitHub tiap
       kombinasi, `--push-hf` auto-push TIAP model (bukan cuma yang terbaik)
@@ -33,7 +32,7 @@ Claude, cek chat/artifact terkait.
       run_id (`<repo-base>-<run_id>`, mis. `pkt-indobert-v3-large`) --
       default push SEMUA run non-smoke-test (masing2 ke repo sendiri), atau
       `--best-only` buat cuma push yang skornya paling tinggi
-- [x] `tests/` -- 62 test (label/clean/evaluate/split/run_all_experiments/
+- [x] `tests/` -- unit/integration test untuk label/clean/evaluate/split/ingest/run_all_experiments/
       generate_report/train_config/train_checkpoint_cleanup/push_to_hf: unit
       test murni, tanpa GPU/internet; ingest: jalan terhadap raw_data asli).
       Jalankan: `source ../.venv/bin/activate && pytest tests/ -v`
@@ -74,8 +73,31 @@ cuma A80 -- alasan tiap perbedaan ada di docstring `src/label.py`).
 | v1 (ICD-based, belum dibersihkan) | 5829 | 4079 | 548 | 499 | 12 |
 | v2 (+ hapus kontrol/post-ranap & COVID incidental) | 5249 | 3673 | 524 | 468 | 12 |
 | v3 (+ flag kelas reliable, ambang 30 sampel) | 5249 | 3673 | 524 | 468 | 12 |
+| v4 (+ quality gate + patient/template-grouped split) | 4840 | 3385 | 728 | 727 | 12 |
 
 Distribusi kelas per versi ada di `data/processed/<version>/class_distribution.json`.
+
+### V4 engineering gate
+
+V4 dibuat dari EDA agregat, bukan dari tuning label berbasis test set. Perubahan
+utamanya: adaptive-header ingestion, penghapusan note kosong/generik secara
+deterministik, deduplikasi kunjungan identik, SHA-256 pseudonymization nomor RM,
+dan connected-group split berdasarkan pasien **atau** template teks. Tidak ada
+keyword yang dipakai untuk mengganti label. Pseudonymization bukan anonymization;
+dataset Kaggle tetap wajib private.
+
+```bash
+python -m src.pipeline --data-version v4
+python -m src.eda_v4
+python -m src.run_all_experiments --only v4_base --smoke-test
+python -m src.run_all_experiments --only v4_base
+```
+
+Alasan, audit removal, source bias, class scarcity, overlap checks, dan baseline
+CPU ada di `reports/v4_engineering_eda.md`; metrik mesin-baca ada di
+`reports/v4_eda_metrics.json`. Setiap training sekarang juga menyimpan
+`error_analysis.json` (agregat) dan `run_manifest.json` (hash data/config,
+versi library, git SHA, device, checkpoint terbaik).
 
 ## Setup
 
@@ -101,12 +123,13 @@ Distribusi kelas per versi ada di `data/processed/<version>/class_distribution.j
 python -m src.pipeline --data-version v1
 python -m src.pipeline --data-version v2
 python -m src.pipeline --data-version v3
+python -m src.pipeline --data-version v4
 ```
 Output: `data/processed/<version>/{train,val,test}.csv` + `class_distribution.json`
 + `dropped_icd_summary.csv` + `build_summary.json`. Format CSV (bukan parquet)
 supaya tetap jalan tanpa `pyarrow` di environment mana pun.
 
-## Training -- BUTUH GPU, smoke-test sudah lolos di Kaggle, training penuh belum kelar
+## Training -- BUTUH GPU; legacy selesai, V4 belum dijalankan
 
 `src/train.py` sudah lengkap (focal loss, class weights, symptom-flag
 injection, dropout-after-load fix dari V5, semuanya di-port dari
@@ -114,13 +137,14 @@ injection, dropout-after-load fix dari V5, semuanya di-port dari
 dan Mac langsung (CPU-only) keduanya nggak cukup buat fine-tune IndoBERT
 dalam waktu wajar, jadi verifikasi sungguhan HARUS di Kaggle GPU.
 
-Status per sesi terakhir: `--smoke-test` (1 epoch, 2 sampel/kelas) SUDAH
-lolos 6/6 kombinasi di Kaggle T4 tanpa error -- ini juga sekaligus
+Status per sesi terakhir: `--smoke-test` (1 epoch, 2 sampel/kelas) dan training
+penuh v1/v2/v3 SUDAH selesai 6/6 kombinasi di Kaggle T4 -- ini juga sekaligus
 membuktikan bagian yang sebelumnya nggak bisa diverifikasi dari sandbox
 manapun (download model pretrained dari HuggingFace, tokenizer, GPU
-fine-tuning loop) beneran jalan. Training PENUH (tanpa `--smoke-test`, 12
-epoch x 6 kombinasi) belum pernah dituntaskan sampai selesai -- itu yang
-seharusnya jadi hasil akhir buat matriks perbandingan di BAB IV laporan TA.
+fine-tuning loop) beneran jalan. Runner berikutnya, sesuai scope eksperimen terbaru,
+melakukan smoke-test lalu full training hanya untuk `v3_base`, `v3_large`,
+`v4_base`, dan `v4_large`. Write access Hugging Face divalidasi sebelum GPU;
+setiap model di-push segera setelah selesai dan upload di-retry sampai tiga kali.
 
 Bug yang udah ketemu & dibenerin lewat proses smoke-test-di-Kaggle ini (baik
 `pytest` di sandbox maupun unit test murni nggak bisa nangkep ini karena
@@ -209,10 +233,11 @@ ikut ke-push -- data pasien tetap cuma di laptop kamu, bukan di GitHub.
 
 Data mentah/pasien jangan pernah diupload manapun selain yang memang dibutuhkan
 untuk training. Yang perlu diupload ke Kaggle cuma folder `data/processed/`
-(sudah dianonim -- No.RM/hash pasien doang, bukan nama/NIK).
+(sudah dipseudonimkan di V4 -- bukan anonymized sepenuhnya, sehingga dataset
+tetap wajib private dan aksesnya harus dibatasi).
 
 - Buka kaggle.com -> Create -> New Dataset.
-- Upload folder `data/processed/` (isinya `v1/`, `v2/`, `v3/` masing-masing
+- Upload folder `data/processed/` (isinya `v1/`, `v2/`, `v3/`, `v4/` masing-masing
   ada `train.csv`, `val.csv`, `test.csv`).
 - **Set visibility ke Private.**
 - Beri nama, misal `pkt-processed-data`.
@@ -312,7 +337,7 @@ print("Pakai sumber data:", src)
 
 os.makedirs("data", exist_ok=True)
 shutil.copytree(src, "data/processed", dirs_exist_ok=True)
-!ls data/processed  # harus kelihatan v1/ v2/ v3/
+!ls data/processed  # harus kelihatan v1/ v2/ v3/ v4/
 ```
 
 ```python
