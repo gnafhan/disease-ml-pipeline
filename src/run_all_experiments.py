@@ -120,16 +120,22 @@ def main():
                               "kombinasi -- backup progress kalau sesi Kaggle mati di tengah. "
                               "Butuh env var GITHUB_TOKEN & GITHUB_REPO.")
     parser.add_argument("--push-hf", default=None, metavar="REPO_BASE",
-                         help="Setelah SEMUA kombinasi di run ini selesai, push TIAP model yang "
-                              "baru dilatih (bukan run smoke-test) ke repo HuggingFace Hub SENDIRI "
-                              "per kombinasi, nama otomatis '<REPO_BASE>-<run_id>' (mis. "
-                              "'gnafhan/pkt-indobert' -> 'gnafhan/pkt-indobert-v1-base', "
-                              "'...-v3-large', dst -- 6 kombinasi = 6 repo, dibuat otomatis). "
-                              "Butuh env var HF_TOKEN. Gagal push 1 model TIDAK menghentikan "
-                              "push model lainnya, dan tetap bisa di-push ulang manual lewat "
-                              "'python -m src.push_to_hf'.")
+                         help="Setelah TIAP kombinasi selesai (bukan nunggu ke-6 kelar -- sama "
+                              "kayak --push-git), push model yang baru dilatih (bukan run "
+                              "smoke-test) ke repo HuggingFace Hub SENDIRI per kombinasi, nama "
+                              "otomatis '<REPO_BASE>-<run_id>' (mis. 'gnafhan/pkt-indobert' -> "
+                              "'gnafhan/pkt-indobert-v1-base', '...-v3-large', dst -- 6 kombinasi "
+                              "= 6 repo, dibuat otomatis). Butuh env var HF_TOKEN. Gagal push 1 "
+                              "model TIDAK menghentikan training/push kombinasi lainnya, dan "
+                              "tetap bisa di-push ulang manual lewat 'python -m src.push_to_hf'.")
     parser.add_argument("--push-hf-private", action="store_true",
                          help="Kalau dipakai bareng --push-hf, bikin repo HuggingFace-nya private.")
+    parser.add_argument("--push-hf-cleanup-local", action="store_true",
+                         help="Kalau dipakai bareng --push-hf, hapus experiments/<run_id>/ lokal "
+                              "SETELAH push ke HuggingFace sukses -- balikin disk /kaggle/working "
+                              "supaya kombinasi berikutnya (apalagi model large) nggak kehabisan "
+                              "tempat. Aman: model udah live di HuggingFace Hub, runs.jsonl/laporan "
+                              "cuma butuh metrik (bukan file model) yang udah dicatat terpisah.")
     args = parser.parse_args()
 
     # Import di sini (bukan di top-level) supaya --help tetap jalan cepat
@@ -159,6 +165,7 @@ def main():
 
         print(f"{header} -- mulai training...")
         t0 = time.time()
+        record = None
         try:
             record = train_run(data_version, model_key, cfg_path=args.config, smoke_test=args.smoke_test)
             elapsed = time.time() - t0
@@ -174,6 +181,27 @@ def main():
 
         if args.push_git:
             _push_progress(run_id)
+
+        # --push-hf jalan PER KOMBINASI (bukan nunggu ke-6 kelar) -- dua alasan:
+        # (1) sama kayak --push-git, kalau sesi Kaggle mati di tengah, model yg
+        #     udah kelar tetap ke-selamatin, bukan ikut hilang;
+        # (2) --push-hf-cleanup-local ngebersihin experiments/<run_id>/ lokal
+        #     abis push sukses -- kalau nunggu ke-6 kombinasi kelar dulu baru
+        #     push+cleanup, disk /kaggle/working bisa keburu penuh SEBELUM
+        #     sampai ke cleanup (ini yang bikin kombinasi terakhir gagal
+        #     "No space left on device" -- cek juga fix checkpoint cleanup di
+        #     src/train.py, itu penyebab utamanya; ini lapisan tambahan).
+        if args.push_hf and record is not None and not record.get("smoke_test"):
+            from src.push_to_hf import push_run_to_hf
+            try:
+                repo_id = push_run_to_hf(record, args.push_hf, private=args.push_hf_private,
+                                          cleanup=args.push_hf_cleanup_local)
+                print(f"    [push-hf] '{run_id}' -> https://huggingface.co/{repo_id}"
+                      + (" (lokal dibersihkan)" if args.push_hf_cleanup_local else ""))
+            except Exception as e:
+                print(f"    [push-hf] GAGAL push '{run_id}' ({e}) -- model tetap ada lokal, "
+                      f"bisa di-push manual: python -m src.push_to_hf --repo-base "
+                      f"{args.push_hf} --run-id {run_id}")
 
         remaining = len(combos) - i
         if remaining and results:
@@ -192,23 +220,6 @@ def main():
     if not args.no_generate_report:
         from reports.generate_report import main as generate_report_main
         generate_report_main()
-
-    if args.push_hf:
-        from src.push_to_hf import push_run_to_hf
-        # Cuma push model yang BARU dilatih di run ini (results) -- run_id lama
-        # yang di-skip via --skip-existing folder model-nya belum tentu ada di
-        # working directory sesi ini, jadi jangan dipaksa push.
-        pushable = [r for r in results if not r.get("smoke_test")]
-        if not pushable:
-            print("[push-hf] SKIP -- tidak ada run non-smoke-test baru di sesi ini yang bisa di-push.")
-        for record in pushable:
-            try:
-                repo_id = push_run_to_hf(record, args.push_hf, private=args.push_hf_private)
-                print(f"[push-hf] '{record['run_id']}' -> https://huggingface.co/{repo_id}")
-            except Exception as e:
-                print(f"[push-hf] GAGAL push '{record['run_id']}' ({e}) -- hasil training tetap "
-                      f"aman di experiments/, bisa di-push manual: python -m src.push_to_hf "
-                      f"--repo-base {args.push_hf} --run-id {record['run_id']}")
 
     return {"ok": results, "failed": failures}
 

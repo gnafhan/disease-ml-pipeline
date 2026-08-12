@@ -163,7 +163,7 @@ def test_push_hf_pushes_each_new_run_to_its_own_dynamic_repo(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
     pushed = []
 
-    def _fake_push_run_to_hf(record, repo_base, private=False):
+    def _fake_push_run_to_hf(record, repo_base, private=False, cleanup=False, experiments_dir="experiments"):
         pushed.append((record["run_id"], repo_base))
         return f"{repo_base}-{record['run_id'].replace('_', '-')}"
 
@@ -180,7 +180,7 @@ def test_push_hf_pushes_each_new_run_to_its_own_dynamic_repo(monkeypatch):
 def test_push_hf_one_failure_does_not_stop_others(monkeypatch, capsys):
     monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
 
-    def _fake_push_run_to_hf(record, repo_base, private=False):
+    def _fake_push_run_to_hf(record, repo_base, private=False, cleanup=False, experiments_dir="experiments"):
         if record["run_id"] == "v1_base":
             raise RuntimeError("simulated HF network error")
         return f"{repo_base}-{record['run_id'].replace('_', '-')}"
@@ -202,7 +202,7 @@ def test_push_hf_skips_smoke_test_runs(monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
     pushed = []
 
-    def _fake_push_run_to_hf(record, repo_base, private=False):
+    def _fake_push_run_to_hf(record, repo_base, private=False, cleanup=False, experiments_dir="experiments"):
         pushed.append(record["run_id"])
         return f"{repo_base}-{record['run_id']}"
 
@@ -214,3 +214,53 @@ def test_push_hf_skips_smoke_test_runs(monkeypatch):
         rae.main()
 
     assert pushed == [], "run smoke-test tidak boleh ikut di-push ke HuggingFace"
+
+
+def test_push_hf_cleanup_flag_forwarded_to_push_run_to_hf(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    seen_cleanup = []
+
+    def _fake_push_run_to_hf(record, repo_base, private=False, cleanup=False, experiments_dir="experiments"):
+        seen_cleanup.append(cleanup)
+        return f"{repo_base}-{record['run_id']}"
+
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)), \
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base", "--push-hf", "someuser/pkt-indobert",
+                    "--push-hf-cleanup-local", "--no-generate-report"]
+        rae.main()
+
+    assert seen_cleanup == [True], "--push-hf-cleanup-local harus diteruskan sbg cleanup=True"
+
+
+def test_push_hf_happens_right_after_its_own_combo_not_batched_at_the_end(monkeypatch):
+    # Ini nge-cek --push-hf jalan PER KOMBINASI (interleaved), bukan nunggu
+    # semua kombinasi kelar dulu -- penting buat skenario disk /kaggle/working
+    # penuh: kalau push+cleanup ditunda sampai akhir, kombinasi terakhir bisa
+    # kehabisan tempat SEBELUM sempat push+cleanup jalan sama sekali.
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    order = []
+
+    def _fake_train_run(data_version, model_key, cfg_path="config/experiment.yaml", smoke_test=False):
+        run_id = f"{data_version}_{model_key}"
+        order.append(("train", run_id))
+        from src.pipeline import log_run
+        record = {"run_id": run_id, "test_f1_macro": 0.5, "smoke_test": smoke_test}
+        log_run(record)
+        return record
+
+    def _fake_push_run_to_hf(record, repo_base, private=False, cleanup=False, experiments_dir="experiments"):
+        order.append(("push", record["run_id"]))
+        return f"{repo_base}-{record['run_id']}"
+
+    with mock.patch("src.train.run", _fake_train_run), \
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base,v2_large",
+                    "--push-hf", "someuser/pkt-indobert", "--no-generate-report"]
+        rae.main()
+
+    assert order == [
+        ("train", "v1_base"), ("push", "v1_base"),
+        ("train", "v2_large"), ("push", "v2_large"),
+    ], "push v1_base harus terjadi SEBELUM training v2_large dimulai, bukan setelah semuanya kelar"

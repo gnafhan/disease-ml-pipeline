@@ -33,10 +33,10 @@ Claude, cek chat/artifact terkait.
       run_id (`<repo-base>-<run_id>`, mis. `pkt-indobert-v3-large`) --
       default push SEMUA run non-smoke-test (masing2 ke repo sendiri), atau
       `--best-only` buat cuma push yang skornya paling tinggi
-- [x] `tests/` -- 54 test (label/clean/evaluate/split/run_all_experiments/
-      generate_report/train_config/push_to_hf: unit test murni, tanpa
-      GPU/internet; ingest: jalan terhadap raw_data asli). Jalankan:
-      `source ../.venv/bin/activate && pytest tests/ -v`
+- [x] `tests/` -- 62 test (label/clean/evaluate/split/run_all_experiments/
+      generate_report/train_config/train_checkpoint_cleanup/push_to_hf: unit
+      test murni, tanpa GPU/internet; ingest: jalan terhadap raw_data asli).
+      Jalankan: `source ../.venv/bin/activate && pytest tests/ -v`
 - [x] `reports/generate_report.py` -- sudah jalan, generate kerangka + tabel;
       dedup otomatis per run_id (entri terbaru menang) supaya hasil smoke-test
       lama nggak numpuk di matriks final
@@ -134,6 +134,17 @@ asli):
   smoke-test lalu training asli jalan berurutan, `runs.jsonl` numpuk 2 entri
   per `run_id` dan matriks akhir jadi campur. Sudah dibenerin (entri
   TERAKHIR per `run_id` yang dipakai), diuji di `tests/test_generate_report.py`.
+- Kombinasi ke-6 (`v3_large`, model paling besar) gagal `OSError: No space
+  left on device` pas nyimpen model -- checkpoint-XXXX/ bikinan HF Trainer
+  (`save_total_limit=2`, sampai 2 salinan model penuh per kombinasi) numpuk
+  terus tanpa dibersihkan sepanjang 6 kombinasi, penuhin disk `/kaggle/working`
+  (~20GB) walau 5 kombinasi sebelumnya sukses. Dibenerin dua lapis: (1)
+  `src/train.py::cleanup_old_checkpoints()` hapus checkpoint-XXXX/ begitu
+  best model di-flatten ke root lewat `trainer.save_model()`, diuji di
+  `tests/test_train_checkpoint_cleanup.py`; (2) `--push-hf` sekarang jalan
+  PER KOMBINASI (bukan nunggu ke-6 kelar) dan `--push-hf-cleanup-local`
+  hapus model lokal begitu sukses ke-push, keduanya diuji di
+  `tests/test_run_all_experiments.py`.
 
 Yang SUDAH diverifikasi jalan tanpa error lewat unit test murni (nggak butuh
 GPU/internet): urutan 6 kombinasi, lanjut otomatis walau 1 gagal, filter
@@ -317,13 +328,21 @@ shutil.copytree(src, "data/processed", dirs_exist_ok=True)
 #   --push-git : backup experiments/runs.jsonl ke GitHub setelah TIAP
 #                kombinasi (bukan nunggu ke-6 kelar). Otomatis SKIP kalau
 #                GITHUB_TOKEN/GITHUB_REPO nggak ke-attach, bukan error fatal.
-#   --push-hf  : setelah SEMUA kombinasi selesai, push TIAP model yang baru
-#                dilatih (bukan run smoke-test) ke repo HuggingFace Hub
-#                SENDIRI-SENDIRI (nama otomatis per run_id -- lihat bagian
-#                7). Cuma dipasang kalau Secret HF_REPO_ID ke-attach.
+#   --push-hf  : setelah TIAP kombinasi (bukan nunggu ke-6 kelar), push
+#                model yang baru dilatih (bukan run smoke-test) ke repo
+#                HuggingFace Hub SENDIRI-SENDIRI (nama otomatis per run_id --
+#                lihat bagian 7). Cuma dipasang kalau Secret HF_REPO_ID
+#                ke-attach.
+#   --push-hf-cleanup-local : hapus experiments/<run_id>/ lokal SETELAH
+#                model itu sukses ke-push -- PENTING di Kaggle karena disk
+#                /kaggle/working terbatas (~20GB); 6 kombinasi (apalagi yang
+#                model large, >1GB/checkpoint) bisa "No space left on
+#                device" di kombinasi terakhir kalau model2 sebelumnya nggak
+#                dibersihkan. Aman dipasang: model udah live di HuggingFace,
+#                metrik buat laporan udah tercatat terpisah di runs.jsonl.
 cmd = "python -m src.run_all_experiments --push-git"
 if os.environ.get("HF_REPO_ID"):
-    cmd += f" --push-hf {os.environ['HF_REPO_ID']}"
+    cmd += f" --push-hf {os.environ['HF_REPO_ID']} --push-hf-cleanup-local"
 print("Menjalankan:", cmd)
 !{cmd}
 ```
@@ -338,7 +357,7 @@ terbaru yang sebelumnya di-push `--push-git`), lalu Cell 5 tapi tambah
 # Cell 5 (versi resume) -- sama kayak Cell 5 biasa, tambah --skip-existing
 cmd = "python -m src.run_all_experiments --push-git --skip-existing"
 if os.environ.get("HF_REPO_ID"):
-    cmd += f" --push-hf {os.environ['HF_REPO_ID']}"
+    cmd += f" --push-hf {os.environ['HF_REPO_ID']} --push-hf-cleanup-local"
 print("Menjalankan:", cmd)
 !{cmd}
 ```
@@ -369,9 +388,10 @@ laptop dan `git pull` biasa dari terminal Mac.
 
 ### 7. (Opsional) Push semua model ke HuggingFace Hub -- 1 repo per kombinasi
 
-Kalau Secret `HF_REPO_ID` ke-attach, ini otomatis kejadian di akhir Cell 5
-tanpa langkah tambahan -- SETIAP model yang baru dilatih di run itu (run
-smoke-test selalu diabaikan) langsung ke-upload, masing2 ke repo sendiri:
+Kalau Secret `HF_REPO_ID` ke-attach, ini otomatis kejadian SETELAH TIAP
+kombinasi (bukan nunggu ke-6 kelar) tanpa langkah tambahan -- model yang
+baru dilatih (run smoke-test selalu diabaikan) langsung ke-upload begitu
+kombinasi itu selesai, masing2 ke repo sendiri:
 `https://huggingface.co/<HF_REPO_ID>-v1-base`,
 `https://huggingface.co/<HF_REPO_ID>-v1-large`, dst sampai `-v3-large` (6
 repo total kalau run penuh), lengkap dengan model card per repo (metrik +

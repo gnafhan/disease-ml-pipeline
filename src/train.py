@@ -23,9 +23,11 @@ tidak ada di taksonomi manapun (v1/v2/v3), sesuai rekomendasi PLAN_V6_DATA_FIX.m
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import random
+import shutil
 import time
 
 import numpy as np
@@ -164,6 +166,33 @@ def make_focal_trainer_class(focal_loss_fn):
     return FocalTrainer
 
 
+def cleanup_old_checkpoints(output_dir: str) -> list[str]:
+    """
+    Hapus checkpoint-XXXX/ bikinan HF Trainer (save_total_limit=2 -> sampai 2
+    salinan model penuh) di dalam output_dir. Dipanggil SETELAH
+    trainer.save_model(output_dir) -- best model udah di-flatten ke root
+    output_dir, jadi checkpoint-XXXX/ di dalamnya sudah redundan.
+
+    Kenapa ini penting: di Kaggle /kaggle/working ruangnya terbatas (~20GB).
+    6 kombinasi x sampai 2 checkpoint + 1 salinan final per kombinasi bisa
+    numpuk sampai puluhan GB, bikin kombinasi terakhir (biasanya model large
+    yg paling besar) gagal nyimpen dgn `OSError: No space left on device`
+    walau kombinasi sebelumnya semua sukses -- itu yang kejadian di Kaggle.
+
+    Non-fatal: kalau satu folder gagal dihapus (jarang, tapi bisa krn file
+    lock dsb), lanjut ke folder lain, jangan gagalin training gara-gara ini.
+    Return list path yang berhasil dihapus (buat testing/logging).
+    """
+    removed = []
+    for ckpt_dir in glob.glob(os.path.join(output_dir, "checkpoint-*")):
+        try:
+            shutil.rmtree(ckpt_dir)
+            removed.append(ckpt_dir)
+        except OSError as e:
+            print(f"[train] gagal hapus checkpoint lama '{ckpt_dir}' (dilanjut, bukan fatal): {e}")
+    return removed
+
+
 def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.yaml",
         smoke_test: bool = False) -> dict:
     cfg = load_config(cfg_path)
@@ -259,6 +288,7 @@ def run(data_version: str, model_key: str, cfg_path: str = "config/experiment.ya
     # dipakai.
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
+    cleanup_old_checkpoints(output_dir)
 
     val_metrics = trainer.evaluate(val_ds)
     val_metrics = {k.replace("eval_", ""): v for k, v in val_metrics.items() if k.startswith("eval_val_")}

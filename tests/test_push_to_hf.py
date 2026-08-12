@@ -134,6 +134,40 @@ def test_push_run_to_hf_uses_dynamic_repo_name(tmp_path, monkeypatch):
     assert (model_dir / "README.md").exists()
 
 
+def test_push_run_to_hf_cleanup_removes_local_model_dir_after_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    monkeypatch.chdir(tmp_path)
+
+    model_dir = tmp_path / "experiments" / "v1_base"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors").write_text("fake weights")
+
+    run = {"run_id": "v1_base", "test_f1_macro": 0.5}
+    fake_api = mock.Mock()
+    with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
+         mock.patch("huggingface_hub.create_repo"):
+        push_run_to_hf(run, "someuser/pkt-indobert", cleanup=True)
+
+    assert not model_dir.exists(), "cleanup=True harus hapus folder model lokal setelah push sukses"
+
+
+def test_push_run_to_hf_without_cleanup_keeps_local_model_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    monkeypatch.chdir(tmp_path)
+
+    model_dir = tmp_path / "experiments" / "v1_base"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.safetensors").write_text("fake weights")
+
+    run = {"run_id": "v1_base", "test_f1_macro": 0.5}
+    fake_api = mock.Mock()
+    with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
+         mock.patch("huggingface_hub.create_repo"):
+        push_run_to_hf(run, "someuser/pkt-indobert")  # cleanup default False
+
+    assert model_dir.exists(), "tanpa cleanup, folder model lokal harus TETAP ADA"
+
+
 def test_push_run_to_hf_raises_clear_error_without_hf_token(tmp_path, monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)

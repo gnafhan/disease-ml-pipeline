@@ -154,10 +154,18 @@ klinis definitif. Jangan dipakai sebagai satu-satunya dasar keputusan medis.
 
 
 def push_run_to_hf(run: dict, repo_base: str, private: bool = False,
-                    experiments_dir: str = "experiments") -> str:
+                    experiments_dir: str = "experiments", cleanup: bool = False) -> str:
     """
     Push SATU run ke repo HuggingFace yang namanya diturunkan otomatis
     (lihat dynamic_repo_id). Return repo_id yang dipakai.
+
+    cleanup=True: setelah upload SUKSES, hapus experiments/<run_id>/ lokal
+    (model+tokenizer+checkpoint) buat balikin disk. Aman karena begitu di
+    sini model udah live di HuggingFace Hub -- salinan lokalnya nggak
+    dibutuhkan lagi buat apapun (runs.jsonl/laporan cuma butuh metrik yang
+    udah dicatat, bukan file model). Ini kepakai di Kaggle yang disknya
+    terbatas dan training 6 kombinasi berturut-turut bisa kehabisan tempat
+    kalau model lama nggak dibersihin.
     """
     from huggingface_hub import HfApi, create_repo
 
@@ -191,12 +199,20 @@ def push_run_to_hf(run: dict, repo_base: str, private: bool = False,
         ignore_patterns=["checkpoint-*/**", "runs/**"],
         commit_message=f"Push {run['run_id']} (test_f1_macro_reliable_only={headline})",
     )
+
+    if cleanup:
+        import shutil
+        try:
+            shutil.rmtree(model_dir)
+        except OSError as e:
+            print(f"[push-to-hf] gagal hapus '{model_dir}' setelah push (dilanjut, bukan fatal): {e}")
+
     return repo_id
 
 
 def push_to_hf(repo_base: str, run_id: str | None = None, best_only: bool = False,
                private: bool = False, runs_path: str = RUNS_PATH,
-               experiments_dir: str = "experiments") -> list[dict]:
+               experiments_dir: str = "experiments", cleanup: bool = False) -> list[dict]:
     """
     Push satu/beberapa/semua run ke HuggingFace Hub, masing2 ke repo
     dinamisnya sendiri. Return list of {"run_id", "repo_id", "ok", ["error"]}
@@ -217,7 +233,8 @@ def push_to_hf(repo_base: str, run_id: str | None = None, best_only: bool = Fals
     results = []
     for run in targets:
         try:
-            repo_id = push_run_to_hf(run, repo_base, private=private, experiments_dir=experiments_dir)
+            repo_id = push_run_to_hf(run, repo_base, private=private, experiments_dir=experiments_dir,
+                                      cleanup=cleanup)
             results.append({"run_id": run["run_id"], "repo_id": repo_id, "ok": True})
         except Exception as e:
             results.append({"run_id": run["run_id"], "error": str(e), "ok": False})
@@ -236,10 +253,15 @@ def main():
                          help="Cuma push run dgn test_f1_macro_reliable_only tertinggi.")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--runs-path", default=RUNS_PATH)
+    parser.add_argument("--cleanup-after-push", action="store_true",
+                         help="Setelah upload sukses, hapus experiments/<run_id>/ lokal buat "
+                              "balikin disk (aman, model udah live di HuggingFace Hub). Berguna "
+                              "kalau /kaggle/working mulai penuh.")
     args = parser.parse_args()
 
     results = push_to_hf(args.repo_base, run_id=args.run_id, best_only=args.best_only,
-                          private=args.private, runs_path=args.runs_path)
+                          private=args.private, runs_path=args.runs_path,
+                          cleanup=args.cleanup_after_push)
     for r in results:
         if r["ok"]:
             print(f"OK    {r['run_id']} -> https://huggingface.co/{r['repo_id']}")
