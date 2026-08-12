@@ -181,23 +181,40 @@ untuk training. Yang perlu diupload ke Kaggle cuma folder `data/processed/`
   - **Accelerator: GPU T4 x2** (atau P100, tergantung kuota tersisa).
   - **Internet: On.**
 
-### 4. (Kalau repo private) Simpan GitHub token sebagai Kaggle Secret
+### 4. Simpan GitHub token sebagai Kaggle Secret
+
+Dibutuhkan utk dua hal: (a) kalau repo private, buat clone; (b) buat
+`--push-git` (lihat Cell 5) -- backup progress otomatis ke GitHub setelah
+tiap kombinasi selesai, supaya kalau sesi Kaggle mati/ke-stop beneran di
+tengah (bukan cuma di-pause), progress yang udah kelar TIDAK hilang.
+`/kaggle/working` itu ephemeral: begitu kernel-nya restart/mati, isinya
+kosong lagi pas clone ulang, jadi tanpa push balik ke GitHub, `runs.jsonl`
+dari sesi sebelumnya nggak ada cara buat kebawa ke sesi yang baru.
 
 - Buat token di GitHub: Settings -> Developer settings -> Personal access
-  tokens -> Fine-grained token, scope read-only ke repo ini saja.
-- Di notebook Kaggle: menu Add-ons -> Secrets -> Add Secret, nama
-  `GITHUB_TOKEN`, isi token-nya.
+  tokens -> Fine-grained token. Kalau cuma buat clone repo private, scope
+  read-only cukup. Kalau juga mau `--push-git`, scope-nya HARUS punya akses
+  write (Contents: Read and write) ke repo ini.
+- Di notebook Kaggle: menu Add-ons -> Secrets -> Add Secret, dua secret:
+  - `GITHUB_TOKEN` -- isi token dari atas.
+  - `GITHUB_REPO` -- isi `<username>/<nama-repo>`, mis. `gnafhan/disease-ml-pipeline`.
 
 ### 5. Isi cell notebook, urut dari atas
 
 ```python
-# Cell 1 -- clone repo (kalau private, pakai token dari Secrets)
+# Cell 1 -- clone repo + set env var buat --push-git nanti
+import os
 from kaggle_secrets import UserSecretsClient
+
+secrets = UserSecretsClient()
 try:
-    token = UserSecretsClient().get_secret("GITHUB_TOKEN")
-    repo_url = f"https://{token}@github.com/<username>/<nama-repo>.git"
+    token = secrets.get_secret("GITHUB_TOKEN")
+    repo = secrets.get_secret("GITHUB_REPO")  # mis. "gnafhan/disease-ml-pipeline"
+    os.environ["GITHUB_TOKEN"] = token
+    os.environ["GITHUB_REPO"] = repo
+    repo_url = f"https://{token}@github.com/{repo}.git"
 except Exception:
-    repo_url = "https://github.com/<username>/<nama-repo>.git"  # repo public
+    repo_url = "https://github.com/<username>/<nama-repo>.git"  # repo public, tanpa Secret
 
 !git clone {repo_url} repo
 %cd repo
@@ -210,11 +227,17 @@ except Exception:
 ```
 
 ```python
-# Cell 3 -- salin data yang sudah diproses dari Kaggle Dataset ke lokasi yang
-# dibaca src/train.py (ganti "pkt-processed-data" sesuai nama dataset kamu)
-!mkdir -p data
-!cp -r /kaggle/input/pkt-processed-data/* data/processed/ 2>/dev/null || \
- cp -r /kaggle/input/pkt-processed-data data/processed
+# Cell 3 -- salin data yang sudah diproses dari Kaggle Dataset. Path Kaggle
+# Input kadang beda format (flat vs nested per-owner), jadi dicari otomatis.
+import glob, os, shutil
+
+matches = [m for m in glob.glob("/kaggle/input/**/pkt-processed-data", recursive=True) if os.path.isdir(m)]
+assert matches, f"pkt-processed-data tidak ketemu. Isi /kaggle/input: {os.listdir('/kaggle/input')}"
+src = matches[0]
+print("Pakai sumber data:", src)
+
+os.makedirs("data", exist_ok=True)
+shutil.copytree(src, "data/processed", dirs_exist_ok=True)
 !ls data/processed  # harus kelihatan v1/ v2/ v3/
 ```
 
@@ -224,19 +247,35 @@ except Exception:
 ```
 
 ```python
-# Cell 5 -- run sungguhan, semua 6 kombinasi
-!python -m src.run_all_experiments
+# Cell 5 -- run sungguhan, semua 6 kombinasi. --push-git nge-backup
+# experiments/runs.jsonl ke GitHub setelah TIAP kombinasi (bukan nunggu
+# ke-6 kelar) -- kalau env var GITHUB_TOKEN/GITHUB_REPO belum di-set (Cell 1
+# gagal ambil Secret, mis. karena repo public dan kamu skip Secret-nya),
+# ini otomatis SKIP dengan pesan, training tetap lanjut seperti biasa.
+!python -m src.run_all_experiments --push-git
 ```
 
-Kalau sesi Kaggle timeout/keputus di tengah (limit ~9-12 jam per sesi, atau
-kuota GPU mingguan habis), buka notebook lagi lain waktu dan jalankan ulang
-Cell 5 dengan tambahan `--skip-existing` -- otomatis lanjut dari kombinasi
-yang belum kelar, gak perlu ngulang dari 0.
+Kalau sesi Kaggle mati/keputus di tengah (limit ~9-12 jam per sesi, kuota GPU
+mingguan habis, atau kernel crash), buka notebook baru, ulangi Cell 1-3
+(clone ulang -- kalau Cell 1-nya berhasil narik `GITHUB_TOKEN`/`GITHUB_REPO`
+dari Secrets, kode yang ke-clone otomatis udah bawa `runs.jsonl` terbaru yang
+sebelumnya di-push `--push-git`), lalu jalankan lagi Cell 5 dengan tambahan
+`--skip-existing`:
+```python
+!python -m src.run_all_experiments --push-git --skip-existing
+```
+Ini bakal ngelewatin kombinasi yang udah kelar (yang run_id-nya ada di
+`runs.jsonl` hasil clone), tinggal lanjut dari yang belum. Tanpa
+`--push-git` di run sebelumnya, langkah ini nggak akan ada gunanya karena
+`runs.jsonl` sesi lama nggak pernah sempat ke-backup.
 
 ### 6. Bawa hasil balik ke repo lokal
 
-Di akhir Cell 5, cetak isi `experiments/runs.jsonl` dan
-`reports/matriks_perbandingan.md`, lalu:
+Kalau kamu udah pakai `--push-git`, `runs.jsonl` di GitHub udah paling baru
+tiap saat -- tinggal `git pull` biasa dari Mac. Kalau nggak pakai
+`--push-git` (mis. run sebentar aja, nggak khawatir sesi mati), di akhir
+Cell 5 cetak isi `experiments/runs.jsonl` dan `reports/matriks_perbandingan.md`,
+lalu:
 ```python
 # Cell 6 -- commit hasil balik ke GitHub langsung dari Kaggle
 !git config user.email "you@example.com"

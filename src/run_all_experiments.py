@@ -8,6 +8,18 @@ Dirancang khusus utk kondisi Kaggle:
   - --skip-existing: kalau sesi Kaggle keputus (limit 9-12 jam) dan run ulang,
     kombinasi yang SUDAH ada di experiments/runs.jsonl otomatis dilewati,
     jadi tinggal lanjut dari yang belum kelar.
+  - --push-git: PENTING kalau kamu takut sesi Kaggle mati/ke-stop di tengah
+    (bukan cuma di-pause). experiments/runs.jsonl cuma hidup di working
+    directory kernel Kaggle yang saat ini jalan -- begitu kernel itu mati
+    beneran (bukan sekadar berhenti lalu dilanjut), working directory-nya
+    KOSONG lagi pas kamu clone ulang, dan --skip-existing jadi useless
+    karena nggak ada apa-apa buat di-skip. --push-git nge-commit+push
+    runs.jsonl ke GitHub SETELAH TIAP kombinasi selesai (bukan nunggu
+    ke-6 kelar), jadi progress yang udah kelar tetap aman di GitHub kalau
+    tiba-tiba mati, dan sesi baru bisa langsung --skip-existing dari situ.
+    Butuh env var GITHUB_TOKEN (personal access token scope write ke repo
+    ini) dan GITHUB_REPO (mis. "gnafhan/disease-ml-pipeline") sudah di-set
+    SEBELUM jalanin command ini.
   - Print progress + estimasi sisa waktu per kombinasi (dari eksekusi
     sebelumnya) supaya kelihatan kalau bakal kelamaan sebelum GPU quota habis.
   - Generate reports/matriks_perbandingan.md otomatis di akhir kalau
@@ -19,6 +31,7 @@ Cara pakai (lihat README.md bagian "Cara run di Kaggle" utk tutorial lengkap):
     python -m src.run_all_experiments --skip-existing      # lanjut dari yg blm ada
     python -m src.run_all_experiments --only v1_large,v3_base
     python -m src.run_all_experiments --smoke-test         # cek pipeline dulu (cepat)
+    python -m src.run_all_experiments --push-git           # auto-backup progress ke GitHub
 """
 
 from __future__ import annotations
@@ -26,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import time
 import traceback
 
@@ -54,6 +68,42 @@ def _load_existing_run_ids(runs_path: str = RUNS_PATH) -> set[str]:
     return ids
 
 
+def _push_progress(context: str) -> None:
+    """
+    Commit + push experiments/runs.jsonl ke GitHub. Dipanggil setelah TIAP
+    kombinasi (berhasil atau gagal) kalau --push-git dipasang. Gagal push
+    (mis. GITHUB_TOKEN belum di-set, atau network Kaggle lagi bermasalah)
+    TIDAK menghentikan training -- runs.jsonl tetap ada lokal, cuma belum
+    ke-backup, jadi training tetap lanjut ke kombinasi berikutnya.
+    """
+    token = os.environ.get("GITHUB_TOKEN")
+    repo = os.environ.get("GITHUB_REPO")
+    if not token or not repo:
+        print("    [push-git] SKIP -- set env var GITHUB_TOKEN & GITHUB_REPO dulu "
+              "kalau mau auto-backup progress ke GitHub")
+        return
+
+    remote_url = f"https://{token}@github.com/{repo}.git"
+    try:
+        subprocess.run(["git", "config", "user.email", "kaggle-runner@example.com"], check=False)
+        subprocess.run(["git", "config", "user.name", "Kaggle Runner"], check=False)
+        subprocess.run(["git", "add", RUNS_PATH], check=False)
+        commit = subprocess.run(["git", "commit", "-m", f"progress: {context}"],
+                                 capture_output=True, text=True)
+        if commit.returncode != 0 and "nothing to commit" not in (commit.stdout + commit.stderr):
+            print(f"    [push-git] commit gagal (dilanjut, bukan fatal): {commit.stderr.strip()}")
+            return
+        push = subprocess.run(["git", "push", remote_url, "HEAD:master"],
+                               capture_output=True, text=True)
+        if push.returncode != 0:
+            print(f"    [push-git] push gagal, progress TETAP AMAN secara lokal, akan dicoba "
+                  f"lagi setelah kombinasi berikutnya: {push.stderr.strip()}")
+        else:
+            print(f"    [push-git] progress ke-backup ke GitHub ({context})")
+    except Exception as e:  # pragma: no cover -- jaring pengaman, jangan sampai training berhenti
+        print(f"    [push-git] error tak terduga (dilanjut, bukan fatal): {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", default=None,
@@ -65,6 +115,10 @@ def main():
     parser.add_argument("--config", default="config/experiment.yaml")
     parser.add_argument("--no-generate-report", action="store_true",
                          help="Jangan auto-generate reports/matriks_perbandingan.md di akhir")
+    parser.add_argument("--push-git", action="store_true",
+                         help="Auto commit+push experiments/runs.jsonl ke GitHub setelah TIAP "
+                              "kombinasi -- backup progress kalau sesi Kaggle mati di tengah. "
+                              "Butuh env var GITHUB_TOKEN & GITHUB_REPO.")
     args = parser.parse_args()
 
     # Import di sini (bukan di top-level) supaya --help tetap jalan cepat
@@ -106,6 +160,9 @@ def main():
             print(f"{header} -- GAGAL setelah {elapsed/60:.1f} menit: {e}")
             traceback.print_exc()
             failures.append({"run_id": run_id, "error": str(e)})
+
+        if args.push_git:
+            _push_progress(run_id)
 
         remaining = len(combos) - i
         if remaining and results:
