@@ -36,7 +36,9 @@ def _fake_train_run_factory(call_log, fail_on=()):
         if run_id in fail_on:
             raise RuntimeError(f"simulated failure: {run_id}")
         from src.pipeline import log_run
-        record = {"run_id": run_id, "test_f1_macro": 0.5}
+        # smoke_test ikut disimpan di record, sama seperti src.train.run asli --
+        # dipakai buat filter --push-hf (run smoke-test nggak boleh ke-push).
+        record = {"run_id": run_id, "test_f1_macro": 0.5, "smoke_test": smoke_test}
         log_run(record)
         return record
     return _fake
@@ -155,3 +157,60 @@ def test_push_git_failure_does_not_stop_training(monkeypatch):
         result = rae.main()
 
     assert len(result["ok"]) == 6, "push gagal tidak boleh bikin kombinasi berikutnya batal dijalankan"
+
+
+def test_push_hf_pushes_each_new_run_to_its_own_dynamic_repo(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    pushed = []
+
+    def _fake_push_run_to_hf(record, repo_base, private=False):
+        pushed.append((record["run_id"], repo_base))
+        return f"{repo_base}-{record['run_id'].replace('_', '-')}"
+
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)), \
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base,v2_large",
+                    "--push-hf", "someuser/pkt-indobert", "--no-generate-report"]
+        rae.main()
+
+    assert pushed == [("v1_base", "someuser/pkt-indobert"), ("v2_large", "someuser/pkt-indobert")]
+
+
+def test_push_hf_one_failure_does_not_stop_others(monkeypatch, capsys):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+
+    def _fake_push_run_to_hf(record, repo_base, private=False):
+        if record["run_id"] == "v1_base":
+            raise RuntimeError("simulated HF network error")
+        return f"{repo_base}-{record['run_id'].replace('_', '-')}"
+
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)), \
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base,v2_large",
+                    "--push-hf", "someuser/pkt-indobert", "--no-generate-report"]
+        result = rae.main()
+
+    assert len(result["ok"]) == 2, "kombinasi training tetap 2/2 berhasil walau push-hf v1_base gagal"
+    out = capsys.readouterr().out
+    assert "GAGAL push 'v1_base'" in out
+    assert "someuser/pkt-indobert-v2-large" in out
+
+
+def test_push_hf_skips_smoke_test_runs(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    pushed = []
+
+    def _fake_push_run_to_hf(record, repo_base, private=False):
+        pushed.append(record["run_id"])
+        return f"{repo_base}-{record['run_id']}"
+
+    call_log = []
+    with mock.patch("src.train.run", _fake_train_run_factory(call_log)), \
+         mock.patch("src.push_to_hf.push_run_to_hf", side_effect=_fake_push_run_to_hf):
+        sys.argv = ["run_all_experiments.py", "--only", "v1_base", "--smoke-test",
+                    "--push-hf", "someuser/pkt-indobert", "--no-generate-report"]
+        rae.main()
+
+    assert pushed == [], "run smoke-test tidak boleh ikut di-push ke HuggingFace"

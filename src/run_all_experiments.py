@@ -119,13 +119,15 @@ def main():
                          help="Auto commit+push experiments/runs.jsonl ke GitHub setelah TIAP "
                               "kombinasi -- backup progress kalau sesi Kaggle mati di tengah. "
                               "Butuh env var GITHUB_TOKEN & GITHUB_REPO.")
-    parser.add_argument("--push-hf", default=None, metavar="REPO_ID",
-                         help="Setelah SEMUA kombinasi (yang dijalankan di run ini) selesai, "
-                              "push model dgn test_f1_macro_reliable_only tertinggi ke "
-                              "HuggingFace Hub repo ini, mis. 'gnafhan/pkt-indobert-best'. "
-                              "Butuh env var HF_TOKEN. Run smoke-test selalu diabaikan saat "
-                              "milih model terbaik. Gagal push TIDAK menghapus hasil training "
-                              "lokal -- bisa di-push ulang manual lewat 'python -m src.push_to_hf'.")
+    parser.add_argument("--push-hf", default=None, metavar="REPO_BASE",
+                         help="Setelah SEMUA kombinasi di run ini selesai, push TIAP model yang "
+                              "baru dilatih (bukan run smoke-test) ke repo HuggingFace Hub SENDIRI "
+                              "per kombinasi, nama otomatis '<REPO_BASE>-<run_id>' (mis. "
+                              "'gnafhan/pkt-indobert' -> 'gnafhan/pkt-indobert-v1-base', "
+                              "'...-v3-large', dst -- 6 kombinasi = 6 repo, dibuat otomatis). "
+                              "Butuh env var HF_TOKEN. Gagal push 1 model TIDAK menghentikan "
+                              "push model lainnya, dan tetap bisa di-push ulang manual lewat "
+                              "'python -m src.push_to_hf'.")
     parser.add_argument("--push-hf-private", action="store_true",
                          help="Kalau dipakai bareng --push-hf, bikin repo HuggingFace-nya private.")
     args = parser.parse_args()
@@ -192,16 +194,21 @@ def main():
         generate_report_main()
 
     if args.push_hf:
-        from src.push_to_hf import push_best_model
-        try:
-            pushed = push_best_model(args.push_hf, private=args.push_hf_private)
-            headline = pushed.get("test_f1_macro_reliable_only", pushed.get("test_f1_macro"))
-            print(f"[push-hf] '{pushed['run_id']}' (test_f1_macro_reliable_only={headline}) "
-                  f"live di https://huggingface.co/{args.push_hf}")
-        except Exception as e:
-            print(f"[push-hf] GAGAL ({e}) -- hasil training tetap aman di experiments/ dan "
-                  f"runs.jsonl, bisa di-push manual nanti: python -m src.push_to_hf "
-                  f"--repo-id {args.push_hf}")
+        from src.push_to_hf import push_run_to_hf
+        # Cuma push model yang BARU dilatih di run ini (results) -- run_id lama
+        # yang di-skip via --skip-existing folder model-nya belum tentu ada di
+        # working directory sesi ini, jadi jangan dipaksa push.
+        pushable = [r for r in results if not r.get("smoke_test")]
+        if not pushable:
+            print("[push-hf] SKIP -- tidak ada run non-smoke-test baru di sesi ini yang bisa di-push.")
+        for record in pushable:
+            try:
+                repo_id = push_run_to_hf(record, args.push_hf, private=args.push_hf_private)
+                print(f"[push-hf] '{record['run_id']}' -> https://huggingface.co/{repo_id}")
+            except Exception as e:
+                print(f"[push-hf] GAGAL push '{record['run_id']}' ({e}) -- hasil training tetap "
+                      f"aman di experiments/, bisa di-push manual: python -m src.push_to_hf "
+                      f"--repo-base {args.push_hf} --run-id {record['run_id']}")
 
     return {"ok": results, "failed": failures}
 

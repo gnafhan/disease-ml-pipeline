@@ -1,8 +1,12 @@
 """
-Push model hasil training ke HuggingFace Hub. Default: pilih otomatis run
-dengan test_f1_macro_reliable_only (fallback test_f1_macro) TERTINGGI di
-experiments/runs.jsonl -- run smoke-test (smoke_test=True) selalu diabaikan
-karena metriknya nggak berarti apa-apa (lihat catatan di run_all_experiments.py).
+Push model hasil training ke HuggingFace Hub. Karena ada 6 kombinasi
+(data-v1/v2/v3 x model-base/large), setiap kombinasi otomatis dapat REPO
+SENDIRI di HuggingFace Hub -- nama repo diturunkan otomatis dari satu
+"repo dasar" + run_id, mis. repo dasar "gnafhan/pkt-indobert" ->
+"gnafhan/pkt-indobert-v1-base", "gnafhan/pkt-indobert-v3-large", dst. Kamu
+CUMA perlu tentuin nama dasarnya sekali, sisanya otomatis -- nggak perlu
+bikin 6 repo manual satu-satu di web HuggingFace (create_repo(exist_ok=True)
+yang bikinnya kalau belum ada).
 
 Butuh:
   - env var HF_TOKEN (HuggingFace User Access Token, scope "Write") -- di
@@ -14,14 +18,21 @@ Butuh:
     di akhir src/train.py::run(), TIDAK perlu langkah manual tambahan)
 
 Cara pakai:
-    python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best
-    python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best --run-id v3_large
-    python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best --private
+    # push SEMUA run non-smoke-test yang ada di runs.jsonl, masing2 ke repo sendiri
+    python -m src.push_to_hf --repo-base gnafhan/pkt-indobert
 
-Juga bisa dipanggil otomatis dari src/run_all_experiments.py lewat
---push-hf <repo-id> setelah SEMUA kombinasi selesai, jadi satu command
-Kaggle bisa langsung: data sudah diproses -> training 6 kombinasi -> model
-terbaik live di HuggingFace Hub, tanpa langkah manual terpisah.
+    # cuma push 1 kombinasi tertentu
+    python -m src.push_to_hf --repo-base gnafhan/pkt-indobert --run-id v3_large
+
+    # cuma push yang skornya (test_f1_macro_reliable_only) paling tinggi
+    python -m src.push_to_hf --repo-base gnafhan/pkt-indobert --best-only
+
+    python -m src.push_to_hf --repo-base gnafhan/pkt-indobert --private
+
+Juga dipanggil otomatis dari src/run_all_experiments.py lewat
+--push-hf <repo-base> setelah SEMUA kombinasi di run itu selesai -- jadi
+satu command Kaggle: data sudah diproses -> training 6 kombinasi -> 6
+model live di HuggingFace Hub (masing2 repo sendiri), tanpa langkah manual.
 """
 
 from __future__ import annotations
@@ -82,7 +93,16 @@ def select_run(runs: list[dict], run_id: str | None) -> dict:
     return matches[-1]
 
 
-def build_model_card(run: dict) -> str:
+def dynamic_repo_id(repo_base: str, run_id: str) -> str:
+    """
+    'gnafhan/pkt-indobert' + 'v1_base' -> 'gnafhan/pkt-indobert-v1-base'.
+    Underscore di run_id diganti "-" (konvensi nama repo HuggingFace lebih
+    umum pakai "-", walau underscore juga valid).
+    """
+    return f"{repo_base}-{run_id.replace('_', '-')}"
+
+
+def build_model_card(run: dict, repo_id: str | None = None) -> str:
     def fmt(key):
         val = run.get(key)
         return f"{val:.4f}" if isinstance(val, (int, float)) else "?"
@@ -102,8 +122,10 @@ tags:
 Model klasifikasi penyakit dari teks anamnesa Bahasa Indonesia (skrining awal
 / surveilans), fine-tuned dari `{run.get('model_name', '?')}`.
 
-Dihasilkan otomatis oleh `src/push_to_hf.py` dari pipeline
-[disease-ml-pipeline](https://github.com/gnafhan/disease-ml-pipeline).
+Salah satu dari 6 kombinasi (data-v1/v2/v3 x model-base/large) di pipeline
+[disease-ml-pipeline](https://github.com/gnafhan/disease-ml-pipeline) --
+tiap kombinasi punya repo HuggingFace sendiri (lihat repo lain dgn prefix
+nama yang sama utk perbandingan versi data/model lainnya).
 
 ## Data
 
@@ -131,20 +153,17 @@ klinis definitif. Jangan dipakai sebagai satu-satunya dasar keputusan medis.
 """
 
 
-def push_best_model(repo_id: str, run_id: str | None = None, private: bool = False,
-                     runs_path: str = RUNS_PATH, experiments_dir: str = "experiments") -> dict:
+def push_run_to_hf(run: dict, repo_base: str, private: bool = False,
+                    experiments_dir: str = "experiments") -> str:
     """
-    Push model dari experiments/<run_id>/ ke HuggingFace Hub `repo_id`.
-    Return record run yang di-push (biar caller bisa log/print ringkasan).
+    Push SATU run ke repo HuggingFace yang namanya diturunkan otomatis
+    (lihat dynamic_repo_id). Return repo_id yang dipakai.
     """
     from huggingface_hub import HfApi, create_repo
 
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise RuntimeError("Env var HF_TOKEN belum di-set (HuggingFace User Access Token, scope Write).")
-
-    runs = load_runs(runs_path)
-    run = select_run(runs, run_id)
 
     model_dir = os.path.join(experiments_dir, run["run_id"])
     if not os.path.isdir(model_dir):
@@ -154,9 +173,11 @@ def push_best_model(repo_id: str, run_id: str | None = None, private: bool = Fal
             "di-push lagi (retrain dulu)."
         )
 
+    repo_id = dynamic_repo_id(repo_base, run["run_id"])
+
     card_path = os.path.join(model_dir, "README.md")
     with open(card_path, "w", encoding="utf-8") as f:
-        f.write(build_model_card(run))
+        f.write(build_model_card(run, repo_id))
 
     create_repo(repo_id, token=token, private=private, exist_ok=True)
 
@@ -170,24 +191,60 @@ def push_best_model(repo_id: str, run_id: str | None = None, private: bool = Fal
         ignore_patterns=["checkpoint-*/**", "runs/**"],
         commit_message=f"Push {run['run_id']} (test_f1_macro_reliable_only={headline})",
     )
-    return run
+    return repo_id
+
+
+def push_to_hf(repo_base: str, run_id: str | None = None, best_only: bool = False,
+               private: bool = False, runs_path: str = RUNS_PATH,
+               experiments_dir: str = "experiments") -> list[dict]:
+    """
+    Push satu/beberapa/semua run ke HuggingFace Hub, masing2 ke repo
+    dinamisnya sendiri. Return list of {"run_id", "repo_id", "ok", ["error"]}
+    -- satu run gagal TIDAK menghentikan push run lainnya.
+    """
+    runs = load_runs(runs_path)
+    if run_id:
+        targets = [select_run(runs, run_id)]
+    elif best_only:
+        targets = [pick_best_run(runs)]
+    else:
+        targets = [r for r in runs if not r.get("smoke_test") and r.get("test_f1_macro") is not None]
+        if not targets:
+            raise SystemExit(
+                f"Tidak ada run non-smoke-test di {runs_path}. Jalankan training asli dulu."
+            )
+
+    results = []
+    for run in targets:
+        try:
+            repo_id = push_run_to_hf(run, repo_base, private=private, experiments_dir=experiments_dir)
+            results.append({"run_id": run["run_id"], "repo_id": repo_id, "ok": True})
+        except Exception as e:
+            results.append({"run_id": run["run_id"], "error": str(e), "ok": False})
+    return results
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-id", required=True, help="mis. gnafhan/pkt-indobert-best")
+    parser.add_argument("--repo-base", required=True,
+                         help="mis. gnafhan/pkt-indobert -- tiap run di-push ke "
+                              "'<repo-base>-<run_id>' (run_id pakai '-', bukan '_')")
     parser.add_argument("--run-id", default=None,
-                         help="Push run_id tertentu (mis. 'v3_large'). Default: otomatis pilih "
-                              "test_f1_macro_reliable_only tertinggi.")
+                         help="Push run_id tertentu aja (mis. 'v3_large'). Default: SEMUA run "
+                              "non-smoke-test, masing2 ke repo sendiri.")
+    parser.add_argument("--best-only", action="store_true",
+                         help="Cuma push run dgn test_f1_macro_reliable_only tertinggi.")
     parser.add_argument("--private", action="store_true")
     parser.add_argument("--runs-path", default=RUNS_PATH)
     args = parser.parse_args()
 
-    run = push_best_model(args.repo_id, run_id=args.run_id, private=args.private,
-                           runs_path=args.runs_path)
-    headline = run.get("test_f1_macro_reliable_only", run.get("test_f1_macro"))
-    print(f"Selesai push '{run['run_id']}' (test_f1_macro_reliable_only={headline}) -> "
-          f"https://huggingface.co/{args.repo_id}")
+    results = push_to_hf(args.repo_base, run_id=args.run_id, best_only=args.best_only,
+                          private=args.private, runs_path=args.runs_path)
+    for r in results:
+        if r["ok"]:
+            print(f"OK    {r['run_id']} -> https://huggingface.co/{r['repo_id']}")
+        else:
+            print(f"GAGAL {r['run_id']}: {r['error']}")
 
 
 if __name__ == "__main__":

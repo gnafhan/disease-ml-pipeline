@@ -27,10 +27,13 @@ Claude, cek chat/artifact terkait.
 - [x] `src/run_all_experiments.py` -- entrypoint Kaggle, orkestrasi 6 kombinasi
       teruji (training di-mock di test, tapi orkestrasinya sendiri sudah
       jalan sungguhan di Kaggle); `--push-git` backup progress ke GitHub tiap
-      kombinasi, `--push-hf` auto-push model terbaik ke HuggingFace Hub di akhir
-- [x] `src/push_to_hf.py` -- pilih run non-smoke-test dgn `test_f1_macro_reliable_only`
-      tertinggi, push ke HuggingFace Hub + generate model card otomatis
-- [x] `tests/` -- 47 test (label/clean/evaluate/split/run_all_experiments/
+      kombinasi, `--push-hf` auto-push TIAP model (bukan cuma yang terbaik)
+      ke repo HuggingFace Hub sendiri-sendiri di akhir
+- [x] `src/push_to_hf.py` -- nama repo HuggingFace diturunkan otomatis per
+      run_id (`<repo-base>-<run_id>`, mis. `pkt-indobert-v3-large`) --
+      default push SEMUA run non-smoke-test (masing2 ke repo sendiri), atau
+      `--best-only` buat cuma push yang skornya paling tinggi
+- [x] `tests/` -- 54 test (label/clean/evaluate/split/run_all_experiments/
       generate_report/train_config/push_to_hf: unit test murni, tanpa
       GPU/internet; ingest: jalan terhadap raw_data asli). Jalankan:
       `source ../.venv/bin/activate && pytest tests/ -v`
@@ -135,10 +138,11 @@ asli):
 Yang SUDAH diverifikasi jalan tanpa error lewat unit test murni (nggak butuh
 GPU/internet): urutan 6 kombinasi, lanjut otomatis walau 1 gagal, filter
 `--only`, resume via `--skip-existing`, `--push-git` (backup progress ke
-GitHub tiap kombinasi), `--push-hf` (pilih & push model terbaik ke
-HuggingFace Hub). Juga: focal loss (loss makin besar kalau prediksi makin
-salah), symptom-flag extraction (flag `[CAMPAK]` udah gak pernah muncul
-lagi), dan `build_input` (aman kalau usia/gender kosong).
+GitHub tiap kombinasi), `--push-hf` (push TIAP model ke repo HuggingFace
+Hub sendiri-sendiri, nama diturunkan otomatis dari run_id -- 1 gagal nggak
+menghentikan yang lain). Juga: focal loss (loss makin besar kalau prediksi
+makin salah), symptom-flag extraction (flag `[CAMPAK]` udah gak pernah
+muncul lagi), dan `build_input` (aman kalau usia/gender kosong).
 
 ### Entrypoint: `src/run_all_experiments.py`
 
@@ -233,7 +237,7 @@ Secret yang perlu dibuat (Add-ons -> Secrets -> Add Secret, di notebook Kaggle):
 | `GITHUB_TOKEN` | Personal access token GitHub (Settings -> Developer settings -> Personal access tokens -> Fine-grained token). Read-only cukup kalau cuma buat clone repo private; kalau mau `--push-git`, HARUS scope write (Contents: Read and write). | Wajib kalau repo private ATAU mau `--push-git` |
 | `GITHUB_REPO` | `<username>/<nama-repo>`, mis. `gnafhan/disease-ml-pipeline` | Wajib kalau mau `--push-git` |
 | `HF_TOKEN` | User Access Token HuggingFace (huggingface.co -> Settings -> Access Tokens -> New token), scope **Write** | Wajib kalau mau `--push-hf` |
-| `HF_REPO_ID` | `<username>/<nama-model>`, mis. `gnafhan/pkt-indobert-best` | Wajib kalau mau `--push-hf` |
+| `HF_REPO_ID` | Nama DASAR repo, mis. `gnafhan/pkt-indobert` -- BUKAN nama repo tunggal. Tiap kombinasi (ada 6: v1/v2/v3 x base/large) otomatis dapat repo sendiri, nama diturunkan jadi `gnafhan/pkt-indobert-v1-base`, `gnafhan/pkt-indobert-v3-large`, dst -- kamu nggak perlu bikin 6 repo manual, `create_repo` yang bikin otomatis kalau belum ada | Wajib kalau mau `--push-hf` |
 
 Nggak ada satupun dari ini yang perlu username asli akun kamu selain di
 `GITHUB_REPO`/`HF_REPO_ID` (itu nama REPO, bukan credential) -- token
@@ -313,9 +317,10 @@ shutil.copytree(src, "data/processed", dirs_exist_ok=True)
 #   --push-git : backup experiments/runs.jsonl ke GitHub setelah TIAP
 #                kombinasi (bukan nunggu ke-6 kelar). Otomatis SKIP kalau
 #                GITHUB_TOKEN/GITHUB_REPO nggak ke-attach, bukan error fatal.
-#   --push-hf  : setelah SEMUA kombinasi selesai, otomatis push model dgn
-#                test_f1_macro_reliable_only TERTINGGI ke HuggingFace Hub.
-#                Cuma dipasang kalau Secret HF_REPO_ID ke-attach.
+#   --push-hf  : setelah SEMUA kombinasi selesai, push TIAP model yang baru
+#                dilatih (bukan run smoke-test) ke repo HuggingFace Hub
+#                SENDIRI-SENDIRI (nama otomatis per run_id -- lihat bagian
+#                7). Cuma dipasang kalau Secret HF_REPO_ID ke-attach.
 cmd = "python -m src.run_all_experiments --push-git"
 if os.environ.get("HF_REPO_ID"):
     cmd += f" --push-hf {os.environ['HF_REPO_ID']}"
@@ -362,24 +367,29 @@ Atau kalau lebih simpel: klik kanan `experiments/runs.jsonl` di file browser
 Kaggle -> Download, lalu taruh manual ke `pipeline/experiments/runs.jsonl` di
 laptop dan `git pull` biasa dari terminal Mac.
 
-### 7. (Opsional) Push model terbaik ke HuggingFace Hub
+### 7. (Opsional) Push semua model ke HuggingFace Hub -- 1 repo per kombinasi
 
 Kalau Secret `HF_REPO_ID` ke-attach, ini otomatis kejadian di akhir Cell 5
-tanpa langkah tambahan -- model dgn `test_f1_macro_reliable_only` tertinggi
-(run smoke-test selalu diabaikan) langsung ke-upload ke
-`https://huggingface.co/<HF_REPO_ID>` lengkap dengan model card (metrik +
-data version + disclaimer batasan model).
+tanpa langkah tambahan -- SETIAP model yang baru dilatih di run itu (run
+smoke-test selalu diabaikan) langsung ke-upload, masing2 ke repo sendiri:
+`https://huggingface.co/<HF_REPO_ID>-v1-base`,
+`https://huggingface.co/<HF_REPO_ID>-v1-large`, dst sampai `-v3-large` (6
+repo total kalau run penuh), lengkap dengan model card per repo (metrik +
+data version + disclaimer batasan model). Repo-nya dibuat otomatis kalau
+belum ada, kamu nggak perlu bikin manual satu-satu di web HuggingFace.
 
 Kalau lupa attach `HF_REPO_ID` waktu run Cell 5, atau mau push run TERTENTU
-(bukan otomatis yang skornya tertinggi), bisa dipanggil manual belakangan
-selama `experiments/<run_id>/` masih ada di working directory sesi yang sama
+saja (bukan semuanya), bisa dipanggil manual belakangan selama
+`experiments/<run_id>/` masih ada di working directory sesi yang sama
 (begitu sesi Kaggle-nya mati, folder model ini HILANG -- makanya kalau mau
 model tersimpan permanen, push-nya harus sebelum sesi itu berakhir):
 ```python
 # Cell 7 -- push manual, tetap pakai Secret HF_REPO_ID (bukan hardcode)
-!python -m src.push_to_hf --repo-id {os.environ["HF_REPO_ID"]}
-# atau push run tertentu, bukan otomatis yang terbaik:
-!python -m src.push_to_hf --repo-id {os.environ["HF_REPO_ID"]} --run-id v3_large
+!python -m src.push_to_hf --repo-base {os.environ["HF_REPO_ID"]}
+# atau push run tertentu doang, bukan semuanya:
+!python -m src.push_to_hf --repo-base {os.environ["HF_REPO_ID"]} --run-id v3_large
+# atau cuma yang skornya (test_f1_macro_reliable_only) paling tinggi:
+!python -m src.push_to_hf --repo-base {os.environ["HF_REPO_ID"]} --best-only
 ```
 
 Model yang di-push cuma model FINAL (bobot terbaik hasil `load_best_model_at_end`),

@@ -1,6 +1,7 @@
 """
-Test logika src/push_to_hf.py -- pilih run terbaik, dedup run_id, dan validasi
-argumen. Semua panggilan ke HuggingFace Hub asli (create_repo/upload_folder)
+Test logika src/push_to_hf.py -- pilih run, nama repo dinamis per run_id,
+dedup run_id, dan push banyak model sekaligus (1 gagal tidak menghentikan
+yang lain). Semua panggilan ke HuggingFace Hub asli (create_repo/upload_folder)
 di-mock, jadi tidak butuh internet/token sungguhan buat jalanin test ini.
 """
 
@@ -13,7 +14,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.push_to_hf import build_model_card, load_runs, pick_best_run, push_best_model, select_run
+from src.push_to_hf import (
+    build_model_card,
+    dynamic_repo_id,
+    load_runs,
+    pick_best_run,
+    push_run_to_hf,
+    push_to_hf,
+    select_run,
+)
 
 RUNS_PATH = "experiments/runs.jsonl"
 
@@ -35,6 +44,11 @@ def teardown_function(_):
         os.remove(RUNS_PATH)
 
 
+def test_dynamic_repo_id_replaces_underscore_with_hyphen():
+    assert dynamic_repo_id("gnafhan/pkt-indobert", "v1_base") == "gnafhan/pkt-indobert-v1-base"
+    assert dynamic_repo_id("gnafhan/pkt-indobert", "v3_large") == "gnafhan/pkt-indobert-v3-large"
+
+
 def test_pick_best_run_ignores_smoke_test_entries():
     runs = [
         {"run_id": "v1_base", "smoke_test": True, "test_f1_macro": 0.99},  # smoke -- HARUS diabaikan
@@ -50,8 +64,6 @@ def test_pick_best_run_prefers_reliable_only_metric_when_present():
         {"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.80, "test_f1_macro_reliable_only": 0.50},
         {"run_id": "v2_base", "smoke_test": False, "test_f1_macro": 0.60, "test_f1_macro_reliable_only": 0.65},
     ]
-    # v2_base menang walau test_f1_macro-nya lebih rendah, karena skor yang
-    # dipakai buat milih adalah reliable_only (lebih jujur soal kelas minor)
     best = pick_best_run(runs)
     assert best["run_id"] == "v2_base"
 
@@ -99,46 +111,108 @@ def test_build_model_card_includes_key_metrics_and_disclaimer():
     assert "BUKAN alat diagnosis" in card and "klinis definitif" in card
 
 
-def test_push_best_model_uploads_from_correct_run_directory(tmp_path, monkeypatch):
+def test_push_run_to_hf_uses_dynamic_repo_name(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
     monkeypatch.chdir(tmp_path)
 
-    _write_runs([
-        {"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.5, "model_name": "m1"},
-        {"run_id": "v2_large", "smoke_test": False, "test_f1_macro": 0.8, "model_name": "m2"},
-    ])
     model_dir = tmp_path / "experiments" / "v2_large"
     model_dir.mkdir(parents=True)
     (model_dir / "config.json").write_text("{}")
 
+    run = {"run_id": "v2_large", "test_f1_macro": 0.8, "model_name": "m2"}
     fake_api = mock.Mock()
     with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
          mock.patch("huggingface_hub.create_repo") as fake_create_repo:
-        run = push_best_model("someuser/somerepo")
+        repo_id = push_run_to_hf(run, "someuser/pkt-indobert")
 
-    assert run["run_id"] == "v2_large"  # skor tertinggi yang non-smoke-test
-    fake_create_repo.assert_called_once()
+    assert repo_id == "someuser/pkt-indobert-v2-large"
+    fake_create_repo.assert_called_once_with(
+        "someuser/pkt-indobert-v2-large", token="dummy-hf-token", private=False, exist_ok=True
+    )
     fake_api.upload_folder.assert_called_once()
-    call_kwargs = fake_api.upload_folder.call_args.kwargs
-    assert call_kwargs["repo_id"] == "someuser/somerepo"
-    assert call_kwargs["folder_path"] == os.path.join("experiments", "v2_large")
-    assert (model_dir / "README.md").exists()  # model card ke-generate
+    assert fake_api.upload_folder.call_args.kwargs["repo_id"] == "someuser/pkt-indobert-v2-large"
+    assert (model_dir / "README.md").exists()
 
 
-def test_push_best_model_raises_clear_error_without_hf_token(tmp_path, monkeypatch):
+def test_push_run_to_hf_raises_clear_error_without_hf_token(tmp_path, monkeypatch):
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.chdir(tmp_path)
-    _write_runs([{"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.5}])
-
+    run = {"run_id": "v1_base", "test_f1_macro": 0.5}
     with pytest.raises(RuntimeError, match="HF_TOKEN"):
-        push_best_model("someuser/somerepo")
+        push_run_to_hf(run, "someuser/pkt-indobert")
 
 
-def test_push_best_model_raises_clear_error_when_model_dir_missing(tmp_path, monkeypatch):
+def test_push_run_to_hf_raises_clear_error_when_model_dir_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
     monkeypatch.chdir(tmp_path)
-    _write_runs([{"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.5}])
-    # folder experiments/v1_base/ SENGAJA tidak dibuat
-
+    run = {"run_id": "v1_base", "test_f1_macro": 0.5}
     with pytest.raises(RuntimeError, match="tidak ketemu"):
-        push_best_model("someuser/somerepo")
+        push_run_to_hf(run, "someuser/pkt-indobert")
+
+
+def test_push_to_hf_default_pushes_every_non_smoke_test_run_to_own_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    monkeypatch.chdir(tmp_path)
+
+    _write_runs([
+        {"run_id": "v1_base", "smoke_test": True, "test_f1_macro": 0.99},  # diabaikan (smoke)
+        {"run_id": "v2_base", "smoke_test": False, "test_f1_macro": 0.60},
+        {"run_id": "v3_large", "smoke_test": False, "test_f1_macro": 0.70},
+    ])
+    for run_id in ["v2_base", "v3_large"]:
+        (tmp_path / "experiments" / run_id).mkdir(parents=True)
+        (tmp_path / "experiments" / run_id / "config.json").write_text("{}")
+
+    fake_api = mock.Mock()
+    with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
+         mock.patch("huggingface_hub.create_repo"):
+        results = push_to_hf("someuser/pkt-indobert")
+
+    assert {r["run_id"] for r in results} == {"v2_base", "v3_large"}  # smoke-test TIDAK ikut
+    assert all(r["ok"] for r in results)
+    assert {r["repo_id"] for r in results} == {
+        "someuser/pkt-indobert-v2-base", "someuser/pkt-indobert-v3-large",
+    }
+
+
+def test_push_to_hf_one_failure_does_not_stop_the_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    monkeypatch.chdir(tmp_path)
+
+    _write_runs([
+        {"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.5},
+        {"run_id": "v2_base", "smoke_test": False, "test_f1_macro": 0.6},
+    ])
+    # cuma v2_base yang punya folder model -- v1_base sengaja dibiarkan gagal
+    (tmp_path / "experiments" / "v2_base").mkdir(parents=True)
+    (tmp_path / "experiments" / "v2_base" / "config.json").write_text("{}")
+
+    fake_api = mock.Mock()
+    with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
+         mock.patch("huggingface_hub.create_repo"):
+        results = push_to_hf("someuser/pkt-indobert")
+
+    by_id = {r["run_id"]: r for r in results}
+    assert by_id["v1_base"]["ok"] is False
+    assert "tidak ketemu" in by_id["v1_base"]["error"]
+    assert by_id["v2_base"]["ok"] is True  # tetap berhasil walau v1_base gagal
+
+
+def test_push_to_hf_best_only_pushes_single_highest_scoring_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "dummy-hf-token")
+    monkeypatch.chdir(tmp_path)
+
+    _write_runs([
+        {"run_id": "v1_base", "smoke_test": False, "test_f1_macro": 0.5},
+        {"run_id": "v3_large", "smoke_test": False, "test_f1_macro": 0.9},
+    ])
+    for run_id in ["v1_base", "v3_large"]:
+        (tmp_path / "experiments" / run_id).mkdir(parents=True)
+
+    fake_api = mock.Mock()
+    with mock.patch("huggingface_hub.HfApi", return_value=fake_api), \
+         mock.patch("huggingface_hub.create_repo"):
+        results = push_to_hf("someuser/pkt-indobert", best_only=True)
+
+    assert len(results) == 1
+    assert results[0]["run_id"] == "v3_large"
