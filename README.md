@@ -210,56 +210,70 @@ untuk training. Yang perlu diupload ke Kaggle cuma folder `data/processed/`
   - **Accelerator: GPU T4 x2** (atau P100, tergantung kuota tersisa).
   - **Internet: On.**
 
-### 4. Simpan token GitHub (dan opsional HuggingFace) sebagai Kaggle Secret
+### 4. Simpan SEMUA credential sebagai Kaggle Secret (satu kali, bukan di kode)
 
-**GitHub token**, dibutuhkan utk dua hal: (a) kalau repo private, buat
-clone; (b) buat `--push-git` (lihat Cell 5) -- backup progress otomatis ke
-GitHub setelah tiap kombinasi selesai, supaya kalau sesi Kaggle mati/ke-stop
-beneran di tengah (bukan cuma di-pause), progress yang udah kelar TIDAK
-hilang. `/kaggle/working` itu ephemeral: begitu kernel-nya restart/mati,
-isinya kosong lagi pas clone ulang, jadi tanpa push balik ke GitHub,
-`runs.jsonl` dari sesi sebelumnya nggak ada cara buat kebawa ke sesi yang baru.
+Baik token GitHub maupun HuggingFace SELALU lewat Kaggle Secrets, TIDAK
+pernah ditulis langsung di cell manapun -- jadi walau kamu ganti/hapus/bikin
+ulang notebook, atau training ulang berkali-kali, kamu nggak pernah perlu
+edit kode buat masukin credential lagi. Bahkan nama repo GitHub/HuggingFace
+kamu juga disimpan sbg Secret (bukan cuma token-nya), supaya Cell 5 nggak
+ada satupun bagian yang perlu diganti manual.
 
-- Buat token di GitHub: Settings -> Developer settings -> Personal access
-  tokens -> Fine-grained token. Kalau cuma buat clone repo private, scope
-  read-only cukup. Kalau juga mau `--push-git`, scope-nya HARUS punya akses
-  write (Contents: Read and write) ke repo ini.
-- Di notebook Kaggle: menu Add-ons -> Secrets -> Add Secret, dua secret:
-  - `GITHUB_TOKEN` -- isi token dari atas.
-  - `GITHUB_REPO` -- isi `<username>/<nama-repo>`, mis. `gnafhan/disease-ml-pipeline`.
+Cara kerja Kaggle Secrets: nilai Secret (token, dsb) disimpan SEKALI di
+level akun Kaggle kamu (Add-ons -> Secrets -> Add Secret). Notebook BARU
+yang kamu bikin nanti tetap perlu "attach" Secret itu lewat menu yang sama
+(centang nama Secret-nya di notebook itu) -- tapi ini cuma klik toggle, kamu
+TIDAK ketik ulang nilai token-nya. Sekali attach, Cell 1 di bawah otomatis
+bisa baca semuanya.
 
-**HuggingFace token** (opsional, cuma kalau mau `--push-hf` -- lihat Cell 5
-dan bagian 7 di bawah, buat push model terbaik langsung ke HuggingFace Hub
-supaya pipeline-nya beneran end-to-end: data -> training -> model live):
+Secret yang perlu dibuat (Add-ons -> Secrets -> Add Secret, di notebook Kaggle):
 
-- Buat token di huggingface.co -> Settings -> Access Tokens -> New token,
-  scope **Write**.
-- Kaggle Secret: nama `HF_TOKEN`, isi token itu.
-- **Nggak perlu username HuggingFace di mana pun** -- token doang cukup,
-  sama seperti GitHub token, HuggingFace nggak validasi token itu harus
-  cocok sama username tertentu.
+| Nama Secret | Isi | Wajib? |
+|---|---|---|
+| `GITHUB_TOKEN` | Personal access token GitHub (Settings -> Developer settings -> Personal access tokens -> Fine-grained token). Read-only cukup kalau cuma buat clone repo private; kalau mau `--push-git`, HARUS scope write (Contents: Read and write). | Wajib kalau repo private ATAU mau `--push-git` |
+| `GITHUB_REPO` | `<username>/<nama-repo>`, mis. `gnafhan/disease-ml-pipeline` | Wajib kalau mau `--push-git` |
+| `HF_TOKEN` | User Access Token HuggingFace (huggingface.co -> Settings -> Access Tokens -> New token), scope **Write** | Wajib kalau mau `--push-hf` |
+| `HF_REPO_ID` | `<username>/<nama-model>`, mis. `gnafhan/pkt-indobert-best` | Wajib kalau mau `--push-hf` |
+
+Nggak ada satupun dari ini yang perlu username asli akun kamu selain di
+`GITHUB_REPO`/`HF_REPO_ID` (itu nama REPO, bukan credential) -- token
+GitHub dan HuggingFace keduanya cukup dipakai sendirian tanpa perlu username
+terpisah, keduanya nggak validasi token itu harus cocok sama username tertentu.
 
 ### 5. Isi cell notebook, urut dari atas
 
 ```python
-# Cell 1 -- clone repo + set env var buat --push-git & --push-hf nanti
+# Cell 1 -- SATU-SATUNYA tempat credential "masuk". Semua nilai narik dari
+# Kaggle Secrets (Add-ons -> Secrets), nggak ada token/nama-repo yang
+# ditulis langsung di sini -- cell ini nggak pernah perlu diedit lagi
+# walau kamu ganti akun/repo, TINGGAL ganti isi Secret-nya di menu Kaggle.
 import os
 from kaggle_secrets import UserSecretsClient
 
 secrets = UserSecretsClient()
-try:
-    token = secrets.get_secret("GITHUB_TOKEN")
-    repo = secrets.get_secret("GITHUB_REPO")  # mis. "gnafhan/disease-ml-pipeline"
-    os.environ["GITHUB_TOKEN"] = token
-    os.environ["GITHUB_REPO"] = repo
-    repo_url = f"https://{token}@github.com/{repo}.git"
-except Exception:
-    repo_url = "https://github.com/<username>/<nama-repo>.git"  # repo public, tanpa Secret
 
-try:
-    os.environ["HF_TOKEN"] = secrets.get_secret("HF_TOKEN")  # opsional, buat --push-hf
-except Exception:
-    pass  # nggak masalah kalau nggak dipakai -- --push-hf nanti tinggal di-skip
+
+def _try_secret(name):
+    try:
+        return secrets.get_secret(name)
+    except Exception:
+        return None
+
+
+for name in ["GITHUB_TOKEN", "GITHUB_REPO", "HF_TOKEN", "HF_REPO_ID"]:
+    value = _try_secret(name)
+    if value:
+        os.environ[name] = value
+
+github_token = os.environ.get("GITHUB_TOKEN")
+github_repo = os.environ.get("GITHUB_REPO")
+if github_token and github_repo:
+    repo_url = f"https://{github_token}@github.com/{github_repo}.git"
+elif github_repo:
+    repo_url = f"https://github.com/{github_repo}.git"  # repo public, token nggak wajib buat clone
+else:
+    raise SystemExit("Secret GITHUB_REPO belum ke-attach di notebook ini -- "
+                      "Add-ons -> Secrets, centang GITHUB_REPO (dan GITHUB_TOKEN kalau perlu).")
 
 !git clone {repo_url} repo
 %cd repo
@@ -292,26 +306,36 @@ shutil.copytree(src, "data/processed", dirs_exist_ok=True)
 ```
 
 ```python
-# Cell 5 -- run sungguhan, semua 6 kombinasi.
-# --push-git : backup experiments/runs.jsonl ke GitHub setelah TIAP
-#              kombinasi (bukan nunggu ke-6 kelar).
-# --push-hf  : setelah SEMUA kombinasi selesai, otomatis push model dgn
-#              test_f1_macro_reliable_only TERTINGGI ke HuggingFace Hub --
-#              ganti repo-id sesuai akun HuggingFace kamu.
-# Kalau env var GITHUB_TOKEN/GITHUB_REPO atau HF_TOKEN belum ke-set (Cell 1
-# gagal ambil Secret), masing-masing otomatis SKIP dengan pesan, training
-# tetap lanjut seperti biasa -- bukan error fatal.
-!python -m src.run_all_experiments --push-git --push-hf gnafhan/pkt-indobert-best
+# Cell 5 -- run sungguhan, semua 6 kombinasi. Command-nya dibangun dari env
+# var (hasil Cell 1), BUKAN hardcode -- jadi cell ini juga nggak pernah
+# perlu diedit walau nama repo GitHub/HuggingFace kamu ganti, tinggal ganti
+# Secret-nya di menu Kaggle.
+#   --push-git : backup experiments/runs.jsonl ke GitHub setelah TIAP
+#                kombinasi (bukan nunggu ke-6 kelar). Otomatis SKIP kalau
+#                GITHUB_TOKEN/GITHUB_REPO nggak ke-attach, bukan error fatal.
+#   --push-hf  : setelah SEMUA kombinasi selesai, otomatis push model dgn
+#                test_f1_macro_reliable_only TERTINGGI ke HuggingFace Hub.
+#                Cuma dipasang kalau Secret HF_REPO_ID ke-attach.
+cmd = "python -m src.run_all_experiments --push-git"
+if os.environ.get("HF_REPO_ID"):
+    cmd += f" --push-hf {os.environ['HF_REPO_ID']}"
+print("Menjalankan:", cmd)
+!{cmd}
 ```
 
 Kalau sesi Kaggle mati/keputus di tengah (limit ~9-12 jam per sesi, kuota GPU
-mingguan habis, atau kernel crash), buka notebook baru, ulangi Cell 1-3
-(clone ulang -- kalau Cell 1-nya berhasil narik `GITHUB_TOKEN`/`GITHUB_REPO`
-dari Secrets, kode yang ke-clone otomatis udah bawa `runs.jsonl` terbaru yang
-sebelumnya di-push `--push-git`), lalu jalankan lagi Cell 5 dengan tambahan
+mingguan habis, atau kernel crash), buka notebook baru (Secret yang sudah
+di-attach otomatis ikut, nggak perlu attach ulang selama masih notebook yang
+sama), ulangi Cell 1-3 (clone ulang -- Cell 1 otomatis bawa `runs.jsonl`
+terbaru yang sebelumnya di-push `--push-git`), lalu Cell 5 tapi tambah
 `--skip-existing`:
 ```python
-!python -m src.run_all_experiments --push-git --skip-existing
+# Cell 5 (versi resume) -- sama kayak Cell 5 biasa, tambah --skip-existing
+cmd = "python -m src.run_all_experiments --push-git --skip-existing"
+if os.environ.get("HF_REPO_ID"):
+    cmd += f" --push-hf {os.environ['HF_REPO_ID']}"
+print("Menjalankan:", cmd)
+!{cmd}
 ```
 Ini bakal ngelewatin kombinasi yang udah kelar (yang run_id-nya ada di
 `runs.jsonl` hasil clone), tinggal lanjut dari yang belum. Tanpa
@@ -326,12 +350,13 @@ tiap saat -- tinggal `git pull` biasa dari Mac. Kalau nggak pakai
 Cell 5 cetak isi `experiments/runs.jsonl` dan `reports/matriks_perbandingan.md`,
 lalu:
 ```python
-# Cell 6 -- commit hasil balik ke GitHub langsung dari Kaggle
-!git config user.email "you@example.com"
+# Cell 6 -- commit hasil balik ke GitHub langsung dari Kaggle. Tetap pakai
+# env var dari Cell 1, bukan token/repo yang ditulis ulang di sini.
+!git config user.email "kaggle-runner@example.com"
 !git config user.name "Kaggle Runner"
 !git add experiments/runs.jsonl reports/*.md
 !git commit -m "results: 6 run selesai dari Kaggle"
-!git push https://{token}@github.com/<username>/<nama-repo>.git master
+!git push https://{os.environ['GITHUB_TOKEN']}@github.com/{os.environ['GITHUB_REPO']}.git master
 ```
 Atau kalau lebih simpel: klik kanan `experiments/runs.jsonl` di file browser
 Kaggle -> Download, lalu taruh manual ke `pipeline/experiments/runs.jsonl` di
@@ -339,22 +364,22 @@ laptop dan `git pull` biasa dari terminal Mac.
 
 ### 7. (Opsional) Push model terbaik ke HuggingFace Hub
 
-Kalau sudah pakai `--push-hf <repo-id>` di Cell 5, ini otomatis kejadian di
-akhir Cell 5 tanpa langkah tambahan -- model dgn `test_f1_macro_reliable_only`
-tertinggi (run smoke-test selalu diabaikan) langsung ke-upload ke
-`https://huggingface.co/<repo-id>` lengkap dengan model card (metrik + data
-version + disclaimer batasan model).
+Kalau Secret `HF_REPO_ID` ke-attach, ini otomatis kejadian di akhir Cell 5
+tanpa langkah tambahan -- model dgn `test_f1_macro_reliable_only` tertinggi
+(run smoke-test selalu diabaikan) langsung ke-upload ke
+`https://huggingface.co/<HF_REPO_ID>` lengkap dengan model card (metrik +
+data version + disclaimer batasan model).
 
-Kalau lupa pasang `--push-hf` waktu run Cell 5, atau mau push run TERTENTU
+Kalau lupa attach `HF_REPO_ID` waktu run Cell 5, atau mau push run TERTENTU
 (bukan otomatis yang skornya tertinggi), bisa dipanggil manual belakangan
 selama `experiments/<run_id>/` masih ada di working directory sesi yang sama
 (begitu sesi Kaggle-nya mati, folder model ini HILANG -- makanya kalau mau
 model tersimpan permanen, push-nya harus sebelum sesi itu berakhir):
 ```python
-# Cell 7 -- push manual (repo-id ganti sesuai punya kamu)
-!python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best
+# Cell 7 -- push manual, tetap pakai Secret HF_REPO_ID (bukan hardcode)
+!python -m src.push_to_hf --repo-id {os.environ["HF_REPO_ID"]}
 # atau push run tertentu, bukan otomatis yang terbaik:
-!python -m src.push_to_hf --repo-id gnafhan/pkt-indobert-best --run-id v3_large
+!python -m src.push_to_hf --repo-id {os.environ["HF_REPO_ID"]} --run-id v3_large
 ```
 
 Model yang di-push cuma model FINAL (bobot terbaik hasil `load_best_model_at_end`),
